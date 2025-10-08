@@ -36,7 +36,11 @@ namespace hs {
                          the resulting surface(s) */
                      const float isoValue,
                      /*! name of the variable to load from the Silo file */
-                     const std::string &variableName = "");
+                     const std::string &variableName = "",
+                     /*! mesh block name for multi-mesh files */
+                     const std::string &meshBlockName = "",
+                     /*! whether this is a multi-mesh file */
+                     bool isMultiMesh = false);
     
     static void create(DataLoader *loader,
                        const ResourceSpecifier &dataURL);
@@ -53,6 +57,8 @@ namespace hs {
     const std::string   texelFormat;
     const float         isoValue;
     const std::string   variableName;
+    const std::string   meshBlockName;
+    const bool          isMultiMesh;
   };
   
 }

@@ -22,7 +22,8 @@
 
 #ifdef HS_HAVE_SILO
 #include <silo.h>
-//#include <pmpio.h>
+// pmpio.h requires MPI, but we're not using it yet for single-file Silo loading
+// #include <pmpio.h>
 #endif
 
 namespace umesh {
@@ -41,7 +42,9 @@ namespace hs {
                                      const std::string &texelFormat,
                                      int numChannels,
                                      float isoValue,
-                                     const std::string &variableName)
+                                     const std::string &variableName,
+                                     const std::string &meshBlockName,
+                                     bool isMultiMesh)
     : fileName(fileName),
       thisPartID(thisPartID),
       cellRange(cellRange),
@@ -49,7 +52,9 @@ namespace hs {
       texelFormat(texelFormat),
       numChannels(numChannels),
       isoValue(isoValue),
-      variableName(variableName)
+      variableName(variableName),
+      meshBlockName(meshBlockName),
+      isMultiMesh(isMultiMesh)
   {}
 
   void siloSplitKDTree(std::vector<box3i> &regions,
@@ -90,6 +95,98 @@ namespace hs {
   void SiloContent::create(DataLoader *loader,
                                 const ResourceSpecifier &dataURL)
   {
+#ifdef HS_HAVE_SILO
+    // First, check if this is a multi-mesh file
+    DBfile *dbfile = DBOpen(dataURL.where.c_str(), DB_UNKNOWN, DB_READ);
+    if (!dbfile)
+      throw std::runtime_error("hs::SiloContent: could not open Silo file '"+dataURL.where+"'");
+    
+    DBtoc *toc = DBGetToc(dbfile);
+    bool isMultiMesh = (toc && toc->nmultivar > 0);
+    std::vector<std::string> meshBlockNames;
+    std::string variableName = dataURL.get("var", dataURL.get("variable", ""));
+    
+    if (isMultiMesh) {
+      // Multi-mesh file: get list of blocks
+      std::cout << "#hs.silo: detected multi-mesh file with " << toc->nmultivar << " multi-variables" << std::endl;
+      
+      const char *multivarName = variableName.empty() ? toc->multivar_names[0] : variableName.c_str();
+      DBmultivar *mv = DBGetMultivar(dbfile, multivarName);
+      if (!mv) {
+        DBClose(dbfile);
+        throw std::runtime_error("hs::SiloContent: could not read multi-variable '"+std::string(multivarName)+"'");
+      }
+      
+      std::cout << "#hs.silo: multi-variable '" << multivarName << "' has " << mv->nvars << " blocks" << std::endl;
+      
+      for (int i = 0; i < mv->nvars; i++) {
+        if (mv->varnames[i]) {
+          meshBlockNames.push_back(std::string(mv->varnames[i]));
+        }
+      }
+      
+      DBFreeMultivar(mv);
+      DBClose(dbfile);
+      
+      // Distribute blocks across ranks
+      int numParts = dataURL.numParts;
+      if (meshBlockNames.size() < numParts) {
+        std::cout << "#hs.silo: WARNING: requested " << numParts << " ranks but only " 
+                  << meshBlockNames.size() << " blocks available. Using " << meshBlockNames.size() << " ranks." << std::endl;
+        numParts = meshBlockNames.size();
+      }
+      
+      if (loader->myRank() == 0) {
+        std::cout << "Silo Multi-Mesh: " << meshBlockNames.size() << " blocks will be distributed across " 
+                  << numParts << " ranks:" << std::endl;
+      }
+      
+      // Distribute blocks round-robin across ranks
+      std::vector<int> blocksPerRank(numParts, 0);
+      for (int i = 0; i < meshBlockNames.size(); i++) {
+        int rankID = i % numParts;
+        blocksPerRank[rankID]++;
+        if (loader->myRank() == 0) {
+          std::cout << " Block #" << i << " (" << meshBlockNames[i] << ") -> rank " << rankID << std::endl;
+        }
+      }
+      
+      if (loader->myRank() == 0) {
+        std::cout << "\nBlock distribution summary:" << std::endl;
+        for (int r = 0; r < numParts; r++) {
+          std::cout << " Rank " << r << ": " << blocksPerRank[r] << " blocks" << std::endl;
+        }
+        std::cout << " Total: " << meshBlockNames.size() << " blocks" << std::endl;
+      }
+      
+      // Create content for each block
+      std::string texelFormat = dataURL.get("format", dataURL.get("type", "float"));
+      if (texelFormat == "f") texelFormat = "float";
+      int numChannels = dataURL.get_int("channels", 1);
+      float isoValue = NAN;
+      std::string isoString = dataURL.get("iso", dataURL.get("isoValue"));
+      if (!isoString.empty())
+        isoValue = std::stof(isoString);
+      
+      for (int i = 0; i < meshBlockNames.size(); i++) {
+        int rankID = i % numParts;
+        loader->addContent(new SiloContent(dataURL.where, rankID,
+                                           box3i(vec3i(0), vec3i(0)), // cellRange not used for multi-mesh
+                                           vec3i(0), // fullVolumeDims determined per-block
+                                           texelFormat,
+                                           numChannels,
+                                           isoValue,
+                                           multivarName,
+                                           meshBlockNames[i],
+                                           true)); // isMultiMesh = true
+      }
+      return; // Done with multi-mesh handling
+    }
+    
+    // Not a multi-mesh file, continue with single-mesh logic
+    DBClose(dbfile);
+#endif
+    
     std::string type = dataURL.get("type",dataURL.get("format",""));
     std::string texelFormat;
     if (type == "") {
@@ -207,7 +304,8 @@ namespace hs {
     if (!isoString.empty())
       isoValue = std::stof(isoString);
     
-    std::string variableName = dataURL.get("var", dataURL.get("variable", ""));
+    if (variableName.empty())
+      variableName = dataURL.get("var", dataURL.get("variable", ""));
     
     for (int i=0;i<dataURL.numParts;i++) {
       loader->addContent(new SiloContent(dataURL.where,i,
@@ -230,34 +328,71 @@ size_t SiloContent::projectedSize()
 #ifndef HS_HAVE_SILO
     throw std::runtime_error("hs::SiloContent: Silo library support not enabled at compile time");
 #else
-    vec3i numVoxels = (cellRange.size()+1);
-    size_t numScalars = 
-      size_t(numVoxels.x)*size_t(numVoxels.y)*size_t(numVoxels.z);
-    std::vector<uint8_t> rawData(numScalars*sizeOf(texelFormat));
+    // Determine which file to open and which variable to load
+    std::string fileToOpen = fileName;
+    std::string varToLoad;
     
-    // Open Silo file
-    DBfile *dbfile = DBOpen(fileName.c_str(), DB_UNKNOWN, DB_READ);
-    if (!dbfile)
-      throw std::runtime_error("hs::SiloContent: could not open Silo file '"+fileName+"'");
-    
-    // Get the list of variables in the file
-    DBtoc *toc = DBGetToc(dbfile);
-    if (!toc || toc->nqvar == 0) {
-      DBClose(dbfile);
-      throw std::runtime_error("hs::SiloContent: no quad variables found in file '"+fileName+"'");
+    if (isMultiMesh) {
+      // Multi-mesh: parse block name to get file path and variable name
+      // Format: "../p0/0.silo:vel1" or "path/to/file.silo:varname"
+      size_t colonPos = meshBlockName.find(':');
+      if (colonPos != std::string::npos) {
+        std::string relativeBlockFile = meshBlockName.substr(0, colonPos);
+        varToLoad = meshBlockName.substr(colonPos + 1);
+        
+        // Resolve relative path based on the master file's directory
+        size_t lastSlash = fileName.find_last_of("/\\");
+        if (lastSlash != std::string::npos) {
+          std::string masterDir = fileName.substr(0, lastSlash + 1);
+          fileToOpen = masterDir + relativeBlockFile;
+        } else {
+          fileToOpen = relativeBlockFile;
+        }
+        
+        if (verbose) {
+          std::cout << "Loading Silo multi-mesh block:" << std::endl;
+          std::cout << "  Master file: " << fileName << std::endl;
+          std::cout << "  Block reference: " << meshBlockName << std::endl;
+          std::cout << "  Resolved file: " << fileToOpen << std::endl;
+          std::cout << "  Variable: " << varToLoad << std::endl;
+        }
+      } else {
+        // No colon, treat entire meshBlockName as variable name
+        varToLoad = meshBlockName;
+        if (verbose) {
+          std::cout << "Loading Silo multi-mesh block: " << meshBlockName << std::endl;
+        }
+      }
     }
     
-    // Use the specified variable name, or the first quad variable by default
+    // Open the appropriate Silo file
+    DBfile *dbfile = DBOpen(fileToOpen.c_str(), DB_UNKNOWN, DB_READ);
+    if (!dbfile)
+      throw std::runtime_error("hs::SiloContent: could not open Silo file '"+fileToOpen+"'");
+    
+    // Determine which variable to load
     const char *varname = nullptr;
-    if (!variableName.empty()) {
-      varname = variableName.c_str();
-      if (verbose) {
-        std::cout << "Loading Silo variable (specified): " << varname << std::endl;
-      }
+    
+    if (isMultiMesh) {
+      varname = varToLoad.c_str();
     } else {
-      varname = toc->qvar_names[0];
-      if (verbose) {
-        std::cout << "Loading Silo variable (first in file): " << varname << std::endl;
+      // Single mesh: use variableName or first quad variable
+      DBtoc *toc = DBGetToc(dbfile);
+      if (!toc || toc->nqvar == 0) {
+        DBClose(dbfile);
+        throw std::runtime_error("hs::SiloContent: no quad variables found in file '"+fileName+"'");
+      }
+      
+      if (!variableName.empty()) {
+        varname = variableName.c_str();
+        if (verbose) {
+          std::cout << "Loading Silo variable (specified): " << varname << std::endl;
+        }
+      } else {
+        varname = toc->qvar_names[0];
+        if (verbose) {
+          std::cout << "Loading Silo variable (first in file): " << varname << std::endl;
+        }
       }
     }
     
@@ -268,43 +403,95 @@ size_t SiloContent::projectedSize()
       throw std::runtime_error("hs::SiloContent: could not read variable '"+std::string(varname)+"'");
     }
     
-    // Get mesh dimensions from the quad variable
-    vec3i fileDims(qvar->dims[0], qvar->dims[1], qvar->ndims > 2 ? qvar->dims[2] : 1);
+    // Get dimensions from the variable (important for multi-mesh where each block has different dims)
+    vec3i blockDims(qvar->dims[0], qvar->dims[1], qvar->ndims > 2 ? qvar->dims[2] : 1);
+    vec3i numVoxels = blockDims;
     
-    std::cout << "  Silo file dimensions: " << fileDims << std::endl;
-    std::cout << "  Expected dimensions: " << fullVolumeDims << std::endl;
-    std::cout << "  Cell range: " << cellRange << std::endl;
-    std::cout << "  Num voxels to extract: " << numVoxels << std::endl;
-    std::cout << "  Data type: " << qvar->datatype << " (DB_FLOAT=" << DB_FLOAT     
-            << ", DB_DOUBLE=" << DB_DOUBLE << ", DB_INT=" << DB_INT << ")" << std::endl;
-    std::cout << "  Texel format: " << texelFormat << std::endl;
-    std::cout << "  Buffer size: " << rawData.size() << " bytes" << std::endl;
+    // Get the spatial coordinates from the associated mesh
+    vec3f meshOrigin(0.f);
+    vec3f meshSpacing(1.f);
     
-    if (fileDims != fullVolumeDims) {
+    if (qvar->meshname) {
+      DBquadmesh *qmesh = DBGetQuadmesh(dbfile, qvar->meshname);
+      if (qmesh) {
+        // Get coordinate arrays
+        if (qmesh->coords && qmesh->coordtype == DB_COLLINEAR) {
+          // Collinear coordinates: separate arrays for x, y, z
+          float *xCoords = (float*)qmesh->coords[0];
+          float *yCoords = (float*)qmesh->coords[1];
+          float *zCoords = qmesh->ndims > 2 ? (float*)qmesh->coords[2] : nullptr;
+          
+          meshOrigin.x = xCoords[0];
+          meshOrigin.y = yCoords[0];
+          meshOrigin.z = zCoords ? zCoords[0] : 0.f;
+          
+          if (qmesh->dims[0] > 1) {
+            meshSpacing.x = xCoords[1] - xCoords[0];
+          }
+          if (qmesh->dims[1] > 1) {
+            meshSpacing.y = yCoords[1] - yCoords[0];
+          }
+          if (zCoords && qmesh->dims[2] > 1) {
+            meshSpacing.z = zCoords[1] - zCoords[0];
+          }
+          
+          if (verbose) {
+            std::cout << "  Mesh origin: " << meshOrigin << std::endl;
+            std::cout << "  Mesh spacing: " << meshSpacing << std::endl;
+          }
+        }
+        DBFreeQuadmesh(qmesh);
+      }
+    }
+    
+    // For multi-mesh, we load the entire block; for single mesh, we use cellRange
+    box3i loadRange;
+    if (isMultiMesh) {
+      loadRange = box3i(vec3i(0), blockDims - 1);
+    } else {
+      loadRange = cellRange;
+      numVoxels = cellRange.size() + 1;
+    }
+    
+    size_t numScalars = size_t(numVoxels.x) * size_t(numVoxels.y) * size_t(numVoxels.z);
+    std::vector<uint8_t> rawData(numScalars * sizeOf(texelFormat));
+    
+    // Extract data from the quad variable
+    void *srcData = qvar->vals[0]; // First component
+    int datatype = qvar->datatype;
+    
+    if (verbose) {
+      std::cout << "  Block dimensions: " << blockDims << std::endl;
+      std::cout << "  Load range: " << loadRange << std::endl;
+      std::cout << "  Num voxels to extract: " << numVoxels << std::endl;
+      std::cout << "  Data type: " << qvar->datatype << " (DB_FLOAT=" << DB_FLOAT 
+              << ", DB_DOUBLE=" << DB_DOUBLE << ", DB_INT=" << DB_INT << ")" << std::endl;
+      std::cout << "  Texel format: " << texelFormat << std::endl;
+      std::cout << "  Buffer size: " << rawData.size() << " bytes" << std::endl;
+    }
+    
+    // For single mesh, verify dimensions match
+    if (!isMultiMesh && blockDims != fullVolumeDims) {
       DBFreeQuadvar(qvar);
       DBClose(dbfile);
       throw std::runtime_error("hs::SiloContent: dimension mismatch - expected " 
                                + std::to_string(fullVolumeDims.x) + "x" 
                                + std::to_string(fullVolumeDims.y) + "x" 
                                + std::to_string(fullVolumeDims.z) 
-                               + " but got " + std::to_string(fileDims.x) + "x" 
-                               + std::to_string(fileDims.y) + "x" 
-                               + std::to_string(fileDims.z));
+                               + " but got " + std::to_string(blockDims.x) + "x" 
+                               + std::to_string(blockDims.y) + "x" 
+                               + std::to_string(blockDims.z));
     }
-    
-    // Extract data from the specified cell range
-    void *srcData = qvar->vals[0]; // First component
-    int datatype = qvar->datatype;
     
     // Convert and copy data to our buffer based on data type
     char *dataPtr = (char *)rawData.data();
     size_t texelSize = sizeOf(texelFormat);
     
-    for (int iz=cellRange.lower.z;iz<=cellRange.upper.z;iz++) {
-      for (int iy=cellRange.lower.y;iy<=cellRange.upper.y;iy++) {
-        for (int ix=cellRange.lower.x;ix<=cellRange.upper.x;ix++) {
-          size_t srcIdx = ix + iy*size_t(fullVolumeDims.x) 
-                            + iz*size_t(fullVolumeDims.x)*size_t(fullVolumeDims.y);
+    for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+      for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+        for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+          size_t srcIdx = ix + iy*size_t(blockDims.x) 
+                            + iz*size_t(blockDims.x)*size_t(blockDims.y);
           
           // Convert based on source and destination types
           if (texelFormat == "float") {
@@ -380,8 +567,10 @@ size_t SiloContent::projectedSize()
     
     std::vector<uint8_t> rawDataRGB; // Empty for now - multi-channel not implemented for Silo yet
 #endif
-    vec3f gridOrigin(cellRange.lower);
-    vec3f gridSpacing(1.f);
+    
+    // Use mesh coordinates if available, otherwise fall back to cell range
+    vec3f gridOrigin = isMultiMesh ? meshOrigin : vec3f(loadRange.lower);
+    vec3f gridSpacing = isMultiMesh ? meshSpacing : vec3f(1.f);
     
     bool doIso = !isnan(isoValue);
     if (doIso) {
@@ -461,12 +650,23 @@ size_t SiloContent::projectedSize()
         (std::make_shared<StructuredVolume>(numVoxels,texelFormat,rawData,rawDataRGB,
                                             gridOrigin,gridSpacing));
     }
+    
+    if (verbose) {
+      std::cout << "  Loaded block with " << (numVoxels.x * numVoxels.y * numVoxels.z) 
+                << " cells at origin " << gridOrigin << std::endl;
+    }
   }
   
   std::string SiloContent::toString() 
   {
     std::stringstream ss;
-    ss << "SiloContext{#" << thisPartID << ",fileName="<<fileName<<",cellRange="<<cellRange<< "}";
+    ss << "SiloContext{#" << thisPartID << ",fileName=" << fileName;
+    if (isMultiMesh) {
+      ss << ",multiMeshBlock=" << meshBlockName;
+    } else {
+      ss << ",cellRange=" << cellRange;
+    }
+    ss << "}";
     return ss.str();
   }
 
