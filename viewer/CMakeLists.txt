@@ -51,6 +51,8 @@ set(SOURCES
   content/TAMRContent.cpp
   content/UMeshContent.h
   content/UMeshContent.cpp
+  content/SiloContent.h
+  content/SiloContent.cpp
   )  
 
 set(TFE_SOURCES
@@ -76,6 +78,18 @@ if(WIN32)
   )
 endif()
 
+# Find Silo library
+find_library(SILO_LIBRARY NAMES siloh5 silo PATHS /usr/lib /usr/local/lib)
+find_path(SILO_INCLUDE_DIR NAMES silo.h PATHS /usr/include /usr/local/include)
+
+if(SILO_LIBRARY AND SILO_INCLUDE_DIR)
+  message(STATUS "Found Silo: ${SILO_LIBRARY}")
+  set(SILO_FOUND TRUE)
+else()
+  message(WARNING "Silo library not found. SiloContent will not be functional.")
+  set(SILO_FOUND FALSE)
+endif()
+
 if (HS_VIEWER AND (TARGET barney))
   # ------------------------------------------------------------------
   add_executable(hsViewer
@@ -97,6 +111,11 @@ if (HS_VIEWER AND (TARGET barney))
   if (HS_USE_IMGUI)
     target_compile_definitions(hsViewer PUBLIC -DHS_HAVE_IMGUI=1)
   endif()
+  if(SILO_FOUND)
+    target_include_directories(hsViewer PRIVATE ${SILO_INCLUDE_DIR})
+    target_link_libraries(hsViewer PRIVATE ${SILO_LIBRARY})
+    target_compile_definitions(hsViewer PRIVATE -DHS_HAVE_SILO=1)
+  endif()
 endif()
 
 # ------------------------------------------------------------------
@@ -107,6 +126,11 @@ target_link_libraries(hsOffline
   PUBLIC
   hayStack
   )
+if(SILO_FOUND)
+  target_include_directories(hsOffline PRIVATE ${SILO_INCLUDE_DIR})
+  target_link_libraries(hsOffline PRIVATE ${SILO_LIBRARY})
+  target_compile_definitions(hsOffline PRIVATE -DHS_HAVE_SILO=1)
+endif()
 
 # ------------------------------------------------------------------
 
@@ -124,6 +148,11 @@ if (HS_CUTEE)
     qtOWL
     )
   target_compile_definitions(hsViewerQT PUBLIC -DHS_CUTEE=1)
+  if(SILO_FOUND)
+    target_include_directories(hsViewerQT PRIVATE ${SILO_INCLUDE_DIR})
+    target_link_libraries(hsViewerQT PRIVATE ${SILO_LIBRARY})
+    target_compile_definitions(hsViewerQT PRIVATE -DHS_HAVE_SILO=1)
+  endif()
   set_target_properties(hsViewerQT
     PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
