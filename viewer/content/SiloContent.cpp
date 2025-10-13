@@ -16,6 +16,9 @@
 
 #include "SiloContent.h"
 #include <fstream>
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <umesh/UMesh.h>
 #include <umesh/extractIsoSurface.h>
 #include <miniScene/Scene.h>
@@ -44,7 +47,8 @@ namespace hs {
                                      float isoValue,
                                      const std::string &variableName,
                                      const std::string &meshBlockName,
-                                     bool isMultiMesh)
+                                     bool isMultiMesh,
+                                     const std::string &isoExtractPath)
     : fileName(fileName),
       thisPartID(thisPartID),
       cellRange(cellRange),
@@ -54,7 +58,8 @@ namespace hs {
       isoValue(isoValue),
       variableName(variableName),
       meshBlockName(meshBlockName),
-      isMultiMesh(isMultiMesh)
+      isMultiMesh(isMultiMesh),
+      isoExtractPath(isoExtractPath)
   {}
 
   void siloSplitKDTree(std::vector<box3i> &regions,
@@ -167,10 +172,12 @@ namespace hs {
       std::string isoString = dataURL.get("iso", dataURL.get("isoValue"));
       if (!isoString.empty())
         isoValue = std::stof(isoString);
+      std::string isoExtractPath = dataURL.get("iso_extract", "");
       
       for (int i = 0; i < meshBlockNames.size(); i++) {
         int rankID = i % numParts;
-        loader->addContent(new SiloContent(dataURL.where, rankID,
+        // Use block index 'i' as the processor ID for consistent numbering
+        loader->addContent(new SiloContent(dataURL.where, i,
                                            box3i(vec3i(0), vec3i(0)), // cellRange not used for multi-mesh
                                            vec3i(0), // fullVolumeDims determined per-block
                                            texelFormat,
@@ -178,7 +185,8 @@ namespace hs {
                                            isoValue,
                                            multivarName,
                                            meshBlockNames[i],
-                                           true)); // isMultiMesh = true
+                                           true, // isMultiMesh = true
+                                           isoExtractPath));
       }
       return; // Done with multi-mesh handling
     }
@@ -303,6 +311,7 @@ namespace hs {
     std::string isoString = dataURL.get("iso",dataURL.get("isoValue"));
     if (!isoString.empty())
       isoValue = std::stof(isoString);
+    std::string isoExtractPath = dataURL.get("iso_extract", "");
     
     if (variableName.empty())
       variableName = dataURL.get("var", dataURL.get("variable", ""));
@@ -313,7 +322,10 @@ namespace hs {
                                               dims,texelFormat,//scalarType,
                                               numChannels,
                                               isoValue,
-                                              variableName));
+                                              variableName,
+                                              "",  // meshBlockName (not used for single-mesh)
+                                              false,  // isMultiMesh
+                                              isoExtractPath));
     }
   }
   
@@ -630,9 +642,105 @@ size_t SiloContent::projectedSize()
 
       // volume = umesh::tetrahedralize(volume,0,0,0,volume->hexes.size());
       // PRINT(volume->toString());
-      umesh::UMesh::SP surf = umesh::extractIsoSurface(volume,isoValue);
+      umesh::UMesh::SP surf = umesh::extractIsoSurface(volume, isoValue);
       surf->finalize();
       PRINT(surf->toString());
+
+      // Save isosurface to file if iso_extract path is specified
+      if (!isoExtractPath.empty()) {
+        // Create output filename prefix: outPath/iso_field_timestep.processor
+        std::string outputFilePrefix = isoExtractPath;
+        // Ensure the path ends with a separator
+        if (!outputFilePrefix.empty() && outputFilePrefix.back() != '/' && outputFilePrefix.back() != '\\') {
+          outputFilePrefix += "/";
+        }
+        
+        // Get field name (variable name or "unknown")
+        std::string fieldName = variableName.empty() ? "unknown" : variableName;
+        // Remove any path prefix from field name (e.g., "vel1" from "../_p5_4320.silo_vel1")
+        size_t lastSlash = fieldName.find_last_of("/\\");
+        if (lastSlash != std::string::npos && lastSlash + 1 < fieldName.length()) {
+          fieldName = fieldName.substr(lastSlash + 1);
+        }
+        
+        // Extract timestep from meshBlockName or fileName
+        std::string timestep = "0";
+        // Use thisPartID as the processor number (sequential from 0)
+        std::string processorId = std::to_string(thisPartID);
+        
+        if (isMultiMesh) {
+          // For multi-mesh, parse meshBlockName to extract timestep
+          // Format: "../p5/4320.silo:vel1" or similar
+          std::string blockName = meshBlockName;
+          
+          // Look for timestep (number before .silo)
+          size_t siloPos = blockName.find(".silo");
+          if (siloPos != std::string::npos) {
+            // Search backwards for a number
+            size_t numEnd = siloPos;
+            size_t numStart = siloPos;
+            while (numStart > 0 && std::isdigit(blockName[numStart - 1])) {
+              numStart--;
+            }
+            if (numStart < numEnd) {
+              timestep = blockName.substr(numStart, numEnd - numStart);
+            }
+          }
+        } else {
+          // For single-mesh, try to extract timestep from fileName
+          std::string baseName = fileName;
+          size_t siloPos = baseName.find(".silo");
+          if (siloPos != std::string::npos) {
+            size_t numEnd = siloPos;
+            size_t numStart = siloPos;
+            while (numStart > 0 && std::isdigit(baseName[numStart - 1])) {
+              numStart--;
+            }
+            if (numStart < numEnd) {
+              timestep = baseName.substr(numStart, numEnd - numStart);
+            }
+          }
+        }
+        
+        // Construct filename: iso_field_timestep.processor
+        outputFilePrefix += "iso_" + fieldName + "_" + timestep + "." + processorId;
+        
+        std::cout << "#hs.silo: writing isosurface in raw numpy arrays format to " 
+                  << outputFilePrefix << "{.vertex_coords.f3,.vertex_scalars.f1,.triangle_indices.i3}" << std::endl;
+        std::cout << "#hs.silo: note - all vertex scalars will be set to isoValue (" 
+                  << isoValue << ") since scalar mapping is not available" << std::endl;
+        
+        // Write the three binary files
+        std::ofstream vertices(outputFilePrefix + ".vertex_coords.f3", std::ios::binary);
+        std::ofstream scalars(outputFilePrefix + ".vertex_scalars.f1", std::ios::binary);
+        std::ofstream indices(outputFilePrefix + ".triangle_indices.i3", std::ios::binary);
+        
+        if (!vertices.is_open() || !scalars.is_open() || !indices.is_open()) {
+          std::cerr << "#hs.silo: ERROR - failed to open output files for writing" << std::endl;
+        } else {
+          // Write triangle indices
+          for (auto t : surf->triangles) {
+            indices.write((const char *)&t, 3*sizeof(int));
+          }
+          
+          // Write vertex coordinates and scalars (all set to isoValue)
+          for (int i = 0; i < surf->vertices.size(); i++) {
+            umesh::vec3f v = surf->vertices[i];
+            vertices.write((const char *)&v, sizeof(v));
+            
+            // Write isoValue as the scalar for all vertices
+            float f = isoValue;
+            scalars.write((const char *)&f, sizeof(f));
+          }
+          
+          vertices.close();
+          scalars.close();
+          indices.close();
+          
+          std::cout << "#hs.silo: saved " << surf->triangles.size() << " triangles and " 
+                    << surf->vertices.size() << " vertices" << std::endl;
+        }
+      }
 
       mini::Mesh::SP mesh = mini::Mesh::create();
       for (auto vtx : surf->vertices)

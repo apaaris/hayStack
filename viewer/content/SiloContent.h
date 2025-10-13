@@ -40,7 +40,9 @@ namespace hs {
                      /*! mesh block name for multi-mesh files */
                      const std::string &meshBlockName = "",
                      /*! whether this is a multi-mesh file */
-                     bool isMultiMesh = false);
+                     bool isMultiMesh = false,
+                     /*! if not empty, save extracted isosurface to this path */
+                     const std::string &isoExtractPath = "");
     
     static void create(DataLoader *loader,
                        const ResourceSpecifier &dataURL);
@@ -59,6 +61,7 @@ namespace hs {
     const std::string   variableName;
     const std::string   meshBlockName;
     const bool          isMultiMesh;
+    const std::string   isoExtractPath;
   };
   
 }
