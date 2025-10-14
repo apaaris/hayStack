@@ -42,7 +42,9 @@ namespace hs {
                      /*! whether this is a multi-mesh file */
                      bool isMultiMesh = false,
                      /*! if not empty, save extracted isosurface to this path */
-                     const std::string &isoExtractPath = "");
+                     const std::string &isoExtractPath = "",
+                     /*! if not empty, map this scalar field to isosurface vertices */
+                     const std::string &mappedScalarField = "");
     
     static void create(DataLoader *loader,
                        const ResourceSpecifier &dataURL);
@@ -62,6 +64,7 @@ namespace hs {
     const std::string   meshBlockName;
     const bool          isMultiMesh;
     const std::string   isoExtractPath;
+    const std::string   mappedScalarField;
   };
   
 }

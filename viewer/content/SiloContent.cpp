@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cmath>
 #include <umesh/UMesh.h>
 #include <umesh/extractIsoSurface.h>
 #include <miniScene/Scene.h>
@@ -48,7 +49,8 @@ namespace hs {
                                      const std::string &variableName,
                                      const std::string &meshBlockName,
                                      bool isMultiMesh,
-                                     const std::string &isoExtractPath)
+                                     const std::string &isoExtractPath,
+                                     const std::string &mappedScalarField)
     : fileName(fileName),
       thisPartID(thisPartID),
       cellRange(cellRange),
@@ -59,7 +61,8 @@ namespace hs {
       variableName(variableName),
       meshBlockName(meshBlockName),
       isMultiMesh(isMultiMesh),
-      isoExtractPath(isoExtractPath)
+      isoExtractPath(isoExtractPath),
+      mappedScalarField(mappedScalarField)
   {}
 
   void siloSplitKDTree(std::vector<box3i> &regions,
@@ -173,6 +176,7 @@ namespace hs {
       if (!isoString.empty())
         isoValue = std::stof(isoString);
       std::string isoExtractPath = dataURL.get("iso_extract", "");
+      std::string mappedScalarField = dataURL.get("mapped_scalar", dataURL.get("ms", ""));
       
       for (int i = 0; i < meshBlockNames.size(); i++) {
         int rankID = i % numParts;
@@ -186,7 +190,8 @@ namespace hs {
                                            multivarName,
                                            meshBlockNames[i],
                                            true, // isMultiMesh = true
-                                           isoExtractPath));
+                                           isoExtractPath,
+                                           mappedScalarField));
       }
       return; // Done with multi-mesh handling
     }
@@ -312,6 +317,7 @@ namespace hs {
     if (!isoString.empty())
       isoValue = std::stof(isoString);
     std::string isoExtractPath = dataURL.get("iso_extract", "");
+    std::string mappedScalarField = dataURL.get("mapped_scalar", dataURL.get("ms", ""));
     
     if (variableName.empty())
       variableName = dataURL.get("var", dataURL.get("variable", ""));
@@ -325,7 +331,8 @@ namespace hs {
                                               variableName,
                                               "",  // meshBlockName (not used for single-mesh)
                                               false,  // isMultiMesh
-                                              isoExtractPath));
+                                              isoExtractPath,
+                                              mappedScalarField));
     }
   }
   
@@ -640,6 +647,49 @@ size_t SiloContent::projectedSize()
             volume->hexes.push_back(hex);
           }
 
+      // Load mapped scalar field if specified (and not a coordinate specifier)
+      std::vector<float> mappedScalarVolume;
+      bool haveMappedScalars = false;
+      if (!mappedScalarField.empty() && mappedScalarField[0] != ':') {
+#ifdef HS_HAVE_SILO
+        // Reopen the file to load the mapped scalar field
+        DBfile *dbfile2 = DBOpen(fileToOpen.c_str(), DB_UNKNOWN, DB_READ);
+        if (dbfile2) {
+          DBquadvar *qvar2 = DBGetQuadvar(dbfile2, mappedScalarField.c_str());
+          if (qvar2) {
+            std::cout << "#hs.silo: loading mapped scalar field '" << mappedScalarField << "'" << std::endl;
+            void *srcData2 = qvar2->vals[0];
+            int datatype2 = qvar2->datatype;
+            
+            mappedScalarVolume.resize(numVoxels.x * numVoxels.y * numVoxels.z);
+            size_t idx = 0;
+            for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+              for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                  size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                  
+                  if (datatype2 == DB_FLOAT) {
+                    mappedScalarVolume[idx] = ((float*)srcData2)[srcIdx];
+                  } else if (datatype2 == DB_DOUBLE) {
+                    mappedScalarVolume[idx] = (float)((double*)srcData2)[srcIdx];
+                  } else if (datatype2 == DB_INT) {
+                    mappedScalarVolume[idx] = (float)((int*)srcData2)[srcIdx];
+                  }
+                  idx++;
+                }
+              }
+            }
+            haveMappedScalars = true;
+            DBFreeQuadvar(qvar2);
+          } else {
+            std::cout << "#hs.silo: WARNING - could not load mapped scalar field '" 
+                      << mappedScalarField << "'" << std::endl;
+          }
+          DBClose(dbfile2);
+        }
+#endif
+      }
+      
       // volume = umesh::tetrahedralize(volume,0,0,0,volume->hexes.size());
       // PRINT(volume->toString());
       umesh::UMesh::SP surf = umesh::extractIsoSurface(volume, isoValue);
@@ -705,10 +755,83 @@ size_t SiloContent::projectedSize()
         // Construct filename: iso_field_timestep.processor
         outputFilePrefix += "iso_" + fieldName + "_" + timestep + "." + processorId;
         
+        // Compute mapped scalars for isosurface vertices
+        std::vector<float> mappedScalars;
+        if (!mappedScalarField.empty()) {
+          if (mappedScalarField == ":x") {
+            // Map X coordinate
+            for (auto v : surf->vertices)
+              mappedScalars.push_back(v.x);
+          } else if (mappedScalarField == ":y") {
+            // Map Y coordinate
+            for (auto v : surf->vertices)
+              mappedScalars.push_back(v.y);
+          } else if (mappedScalarField == ":z") {
+            // Map Z coordinate
+            for (auto v : surf->vertices)
+              mappedScalars.push_back(v.z);
+          } else if (haveMappedScalars) {
+            // Trilinear interpolation of the mapped scalar field
+            for (auto v : surf->vertices) {
+              // Convert world position back to grid coordinates
+              umesh::vec3f gridPos = (v - (const umesh::vec3f&)gridOrigin) / (const umesh::vec3f&)gridSpacing;
+              
+              // Clamp to valid range
+              gridPos.x = std::max(0.f, std::min((float)(numVoxels.x - 1), gridPos.x));
+              gridPos.y = std::max(0.f, std::min((float)(numVoxels.y - 1), gridPos.y));
+              gridPos.z = std::max(0.f, std::min((float)(numVoxels.z - 1), gridPos.z));
+              
+              // Trilinear interpolation
+              int ix0 = (int)std::floor(gridPos.x), ix1 = std::min(ix0 + 1, numVoxels.x - 1);
+              int iy0 = (int)std::floor(gridPos.y), iy1 = std::min(iy0 + 1, numVoxels.y - 1);
+              int iz0 = (int)std::floor(gridPos.z), iz1 = std::min(iz0 + 1, numVoxels.z - 1);
+              
+              float fx = gridPos.x - ix0;
+              float fy = gridPos.y - iy0;
+              float fz = gridPos.z - iz0;
+              
+              auto getVal = [&](int ix, int iy, int iz) {
+                return mappedScalarVolume[ix + iy * numVoxels.x + iz * numVoxels.x * numVoxels.y];
+              };
+              
+              float v000 = getVal(ix0, iy0, iz0);
+              float v001 = getVal(ix1, iy0, iz0);
+              float v010 = getVal(ix0, iy1, iz0);
+              float v011 = getVal(ix1, iy1, iz0);
+              float v100 = getVal(ix0, iy0, iz1);
+              float v101 = getVal(ix1, iy0, iz1);
+              float v110 = getVal(ix0, iy1, iz1);
+              float v111 = getVal(ix1, iy1, iz1);
+              
+              float v00 = v000 * (1 - fx) + v001 * fx;
+              float v01 = v010 * (1 - fx) + v011 * fx;
+              float v10 = v100 * (1 - fx) + v101 * fx;
+              float v11 = v110 * (1 - fx) + v111 * fx;
+              
+              float v0 = v00 * (1 - fy) + v01 * fy;
+              float v1 = v10 * (1 - fy) + v11 * fy;
+              
+              float interpolated = v0 * (1 - fz) + v1 * fz;
+              mappedScalars.push_back(interpolated);
+            }
+          } else {
+            // Fallback to isoValue
+            std::cout << "#hs.silo: WARNING - mapped scalar field '" << mappedScalarField 
+                      << "' could not be loaded, using isoValue" << std::endl;
+            for (int i = 0; i < surf->vertices.size(); i++)
+              mappedScalars.push_back(isoValue);
+          }
+        } else {
+          // No mapped scalar specified, use isoValue
+          for (int i = 0; i < surf->vertices.size(); i++)
+            mappedScalars.push_back(isoValue);
+        }
+        
         std::cout << "#hs.silo: writing isosurface in raw numpy arrays format to " 
                   << outputFilePrefix << "{.vertex_coords.f3,.vertex_scalars.f1,.triangle_indices.i3}" << std::endl;
-        std::cout << "#hs.silo: note - all vertex scalars will be set to isoValue (" 
-                  << isoValue << ") since scalar mapping is not available" << std::endl;
+        if (!mappedScalarField.empty()) {
+          std::cout << "#hs.silo: mapping scalar field: " << mappedScalarField << std::endl;
+        }
         
         // Write the three binary files
         std::ofstream vertices(outputFilePrefix + ".vertex_coords.f3", std::ios::binary);
@@ -723,13 +846,13 @@ size_t SiloContent::projectedSize()
             indices.write((const char *)&t, 3*sizeof(int));
           }
           
-          // Write vertex coordinates and scalars (all set to isoValue)
+          // Write vertex coordinates and mapped scalars
           for (int i = 0; i < surf->vertices.size(); i++) {
             umesh::vec3f v = surf->vertices[i];
             vertices.write((const char *)&v, sizeof(v));
             
-            // Write isoValue as the scalar for all vertices
-            float f = isoValue;
+            // Write mapped scalar value
+            float f = mappedScalars[i];
             scalars.write((const char *)&f, sizeof(f));
           }
           
