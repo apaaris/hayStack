@@ -20,9 +20,43 @@
 #include <cctype>
 #include <cstdio>
 #include <cmath>
+#include <cstring>
 #include <umesh/UMesh.h>
 #include <umesh/extractIsoSurface.h>
 #include <miniScene/Scene.h>
+
+// Forward declarations for derived velocity field computations
+namespace hs {
+  namespace vorticity {
+    void computeVelocityGradients(
+      const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
+      int nx, int ny, int nz, float dx, float dy, const std::vector<float>& z,
+      std::vector<float>& dux, std::vector<float>& duy, std::vector<float>& duz,
+      std::vector<float>& dvx, std::vector<float>& dvy, std::vector<float>& dvz,
+      std::vector<float>& dwx, std::vector<float>& dwy, std::vector<float>& dwz);
+    
+    void computeLambda2(const std::vector<float>& dux, const std::vector<float>& duy, const std::vector<float>& duz,
+                        const std::vector<float>& dvx, const std::vector<float>& dvy, const std::vector<float>& dvz,
+                        const std::vector<float>& dwx, const std::vector<float>& dwy, const std::vector<float>& dwz,
+                        std::vector<float>& result);
+    
+    void computeQCriterion(const std::vector<float>& dux, const std::vector<float>& duy, const std::vector<float>& duz,
+                           const std::vector<float>& dvx, const std::vector<float>& dvy, const std::vector<float>& dvz,
+                           const std::vector<float>& dwx, const std::vector<float>& dwy, const std::vector<float>& dwz,
+                           std::vector<float>& result);
+    
+    void computeVorticity(const std::vector<float>& duy, const std::vector<float>& duz,
+                          const std::vector<float>& dvx, const std::vector<float>& dvz,
+                          const std::vector<float>& dwx, const std::vector<float>& dwy,
+                          std::vector<float>& result);
+    
+    void computeHelicity(const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
+                         const std::vector<float>& duy, const std::vector<float>& duz,
+                         const std::vector<float>& dvx, const std::vector<float>& dvz,
+                         const std::vector<float>& dwx, const std::vector<float>& dwy,
+                         std::vector<float>& result);
+  }
+}
 
 #ifdef HS_HAVE_SILO
 #include <silo.h>
@@ -118,7 +152,20 @@ namespace hs {
       // Multi-mesh file: get list of blocks
       std::cout << "#hs.silo: detected multi-mesh file with " << toc->nmultivar << " multi-variables" << std::endl;
       
-      const char *multivarName = variableName.empty() ? toc->multivar_names[0] : variableName.c_str();
+      // Check if this is a derived variable
+      bool isDerivedVar = (variableName == "lambda2" || variableName == "qCriterion" || 
+                          variableName == "vorticity" || variableName == "helicity" ||
+                          variableName == "vel_mag");
+      
+      const char *multivarName;
+      if (isDerivedVar) {
+        // For derived variables, use vel1 to get the mesh structure
+        std::cout << "#hs.silo: '" << variableName << "' is a derived variable, using vel1 for mesh structure" << std::endl;
+        multivarName = "vel1";
+      } else {
+        multivarName = variableName.empty() ? toc->multivar_names[0] : variableName.c_str();
+      }
+      
       DBmultivar *mv = DBGetMultivar(dbfile, multivarName);
       if (!mv) {
         DBClose(dbfile);
@@ -187,7 +234,7 @@ namespace hs {
                                            texelFormat,
                                            numChannels,
                                            isoValue,
-                                           multivarName,
+                                           variableName,  // Pass the requested variable, not the one used for mesh structure
                                            meshBlockNames[i],
                                            true, // isMultiMesh = true
                                            isoExtractPath,
@@ -391,9 +438,19 @@ size_t SiloContent::projectedSize()
     
     // Determine which variable to load
     const char *varname = nullptr;
+    std::string requestedVar;
     
+    // Check if this is a derived variable
+    bool isDerivedVar = false;
     if (isMultiMesh) {
-      varname = varToLoad.c_str();
+      // Use variableName (passed from constructor) instead of parsing from meshBlockName
+      // because for derived variables, meshBlockName contains vel1, not the requested variable
+      requestedVar = variableName.empty() ? varToLoad : variableName;
+      isDerivedVar = (requestedVar == "lambda2" || requestedVar == "qCriterion" || 
+                     requestedVar == "vorticity" || requestedVar == "helicity" ||
+                     requestedVar == "vel_mag");
+      // For derived vars in multi-mesh, we need vel1 for the mesh structure
+      varname = isDerivedVar ? "vel1" : varToLoad.c_str();
     } else {
       // Single mesh: use variableName or first quad variable
       DBtoc *toc = DBGetToc(dbfile);
@@ -403,12 +460,17 @@ size_t SiloContent::projectedSize()
       }
       
       if (!variableName.empty()) {
-        varname = variableName.c_str();
+        requestedVar = variableName;
+        isDerivedVar = (requestedVar == "lambda2" || requestedVar == "qCriterion" || 
+                       requestedVar == "vorticity" || requestedVar == "helicity" ||
+                       requestedVar == "vel_mag");
+        varname = isDerivedVar ? "vel1" : variableName.c_str();
         if (verbose) {
-          std::cout << "Loading Silo variable (specified): " << varname << std::endl;
+          std::cout << "Loading Silo variable (specified): " << requestedVar << std::endl;
         }
       } else {
         varname = toc->qvar_names[0];
+        requestedVar = varname;
         if (verbose) {
           std::cout << "Loading Silo variable (first in file): " << varname << std::endl;
         }
@@ -565,6 +627,108 @@ size_t SiloContent::projectedSize()
     
     // Clean up Silo resources
     DBFreeQuadvar(qvar);
+    
+    // Compute derived variables if needed
+    if (isDerivedVar) {
+      std::cout << "#hs.silo: computing derived variable '" << requestedVar << "' from velocity components" << std::endl;
+      
+      // Load vel2 and vel3
+      std::vector<float> vel1Data, vel2Data, vel3Data;
+      
+      // vel1 is already loaded in rawData, convert to float vector
+      vel1Data.resize(numScalars);
+      for (size_t i = 0; i < numScalars; i++) {
+        if (texelFormat == "float")
+          vel1Data[i] = ((float*)rawData.data())[i];
+        else if (texelFormat == "uint8_t")
+          vel1Data[i] = ((uint8_t*)rawData.data())[i] / 255.0f;
+        else if (texelFormat == "uint16_t")
+          vel1Data[i] = ((uint16_t*)rawData.data())[i] / 65535.0f;
+      }
+      
+      // Load vel2
+      DBquadvar *qvar2 = DBGetQuadvar(dbfile, "vel2");
+      if (!qvar2) throw std::runtime_error("Could not load vel2 for derived variable");
+      vel2Data.resize(numScalars);
+      void *srcData2 = qvar2->vals[0];
+      int datatype2 = qvar2->datatype;
+      size_t idx = 0;
+      for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+        for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+          for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+            size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+            if (datatype2 == DB_FLOAT) vel2Data[idx] = ((float*)srcData2)[srcIdx];
+            else if (datatype2 == DB_DOUBLE) vel2Data[idx] = (float)((double*)srcData2)[srcIdx];
+            else if (datatype2 == DB_INT) vel2Data[idx] = (float)((int*)srcData2)[srcIdx];
+            idx++;
+          }
+        }
+      }
+      DBFreeQuadvar(qvar2);
+      
+      // Load vel3
+      DBquadvar *qvar3 = DBGetQuadvar(dbfile, "vel3");
+      if (!qvar3) throw std::runtime_error("Could not load vel3 for derived variable");
+      vel3Data.resize(numScalars);
+      void *srcData3 = qvar3->vals[0];
+      int datatype3 = qvar3->datatype;
+      idx = 0;
+      for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+        for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+          for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+            size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+            if (datatype3 == DB_FLOAT) vel3Data[idx] = ((float*)srcData3)[srcIdx];
+            else if (datatype3 == DB_DOUBLE) vel3Data[idx] = (float)((double*)srcData3)[srcIdx];
+            else if (datatype3 == DB_INT) vel3Data[idx] = (float)((int*)srcData3)[srcIdx];
+            idx++;
+          }
+        }
+      }
+      DBFreeQuadvar(qvar3);
+      
+      // Build z coordinate array for non-uniform spacing
+      std::vector<float> zCoords(numVoxels.z);
+      for (int i = 0; i < numVoxels.z; i++) {
+        zCoords[i] = meshOrigin.z + i * meshSpacing.z;
+      }
+      
+      // Compute the requested derived variable
+      std::vector<float> derivedData(numScalars);
+      
+      if (requestedVar == "vel_mag") {
+        // Velocity magnitude
+        for (size_t i = 0; i < numScalars; i++) {
+          derivedData[i] = std::sqrt(vel1Data[i]*vel1Data[i] + vel2Data[i]*vel2Data[i] + vel3Data[i]*vel3Data[i]);
+        }
+      } else {
+        // Need gradients for other derived variables
+        std::vector<float> dux(numScalars), duy(numScalars), duz(numScalars);
+        std::vector<float> dvx(numScalars), dvy(numScalars), dvz(numScalars);
+        std::vector<float> dwx(numScalars), dwy(numScalars), dwz(numScalars);
+        
+        vorticity::computeVelocityGradients(vel1Data, vel2Data, vel3Data,
+                                           numVoxels.x, numVoxels.y, numVoxels.z,
+                                           meshSpacing.x, meshSpacing.y, zCoords,
+                                           dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz);
+        
+        if (requestedVar == "lambda2") {
+          vorticity::computeLambda2(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, derivedData);
+        } else if (requestedVar == "qCriterion") {
+          vorticity::computeQCriterion(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, derivedData);
+        } else if (requestedVar == "vorticity") {
+          vorticity::computeVorticity(duy, duz, dvx, dvz, dwx, dwy, derivedData);
+        } else if (requestedVar == "helicity") {
+          vorticity::computeHelicity(vel1Data, vel2Data, vel3Data, duy, duz, dvx, dvz, dwx, dwy, derivedData);
+        }
+      }
+      
+      // Convert back to rawData format (derived variables are always float)
+      rawData.resize(numScalars * sizeof(float));
+      memcpy(rawData.data(), derivedData.data(), numScalars * sizeof(float));
+      
+      std::cout << "#hs.silo: computed " << requestedVar << std::endl;
+    }
+    
     DBClose(dbfile);
     
     // Validate the data for debugging
@@ -901,5 +1065,196 @@ size_t SiloContent::projectedSize()
     return ss.str();
   }
 
+  // Vorticity and derived field computations
+  namespace vorticity {
+    
+    // Compute gradient in X direction (periodic boundaries)
+    void gradX(const std::vector<float>& u, std::vector<float>& uGrad, int nx, int ny, int nz, float dx) {
+      for (int z = 0; z < nz; ++z) {
+        size_t off = z * nx * ny;
+        for (int row = 0; row < ny; ++row) {
+          // Periodic boundaries
+          uGrad[off + row*nx] = 0.5f * (u[off + row*nx + 1] - u[off + row*nx + nx - 1]) / (2.0f*dx);
+          uGrad[off + row*nx + nx - 1] = 0.5f * (u[off + row*nx] - u[off + row*nx + nx - 2]) / (2.0f*dx);
+          // Interior points
+          for (int col = 1; col < nx - 1; ++col) {
+            uGrad[off + row*nx + col] = 0.5f * (u[off + row*nx + col + 1] - u[off + row*nx + col - 1]) / (2.0f*dx);
+          }
+        }
+      }
+    }
+    
+    // Compute gradient in Y direction (periodic boundaries)
+    void gradY(const std::vector<float>& v, std::vector<float>& vGrad, int nx, int ny, int nz, float dy) {
+      for (int z = 0; z < nz; ++z) {
+        size_t off = z * nx * ny;
+        for (int col = 0; col < nx; ++col) {
+          // Periodic boundaries
+          vGrad[0*nx + col + off] = 0.5f * (v[1*nx + col + off] - v[(ny-1)*nx + col + off]) / (2.0f*dy);
+          vGrad[(ny-1)*nx + col + off] = 0.5f * (v[0*nx + col + off] - v[(ny-2)*nx + col + off]) / (2.0f*dy);
+          // Interior points
+          for (int row = 1; row < ny - 1; ++row) {
+            vGrad[row*nx + col + off] = 0.5f * (v[(row+1)*nx + col + off] - v[(row-1)*nx + col + off]) / (2.0f*dy);
+          }
+        }
+      }
+    }
+    
+    // Compute gradient in Z direction (non-uniform spacing)
+    void gradZ(const std::vector<float>& w, std::vector<float>& wGrad, int nx, int ny, int nz, const std::vector<float>& z) {
+      size_t off = nx * ny;
+      for (int row = 0; row < ny; ++row) {
+        for (int col = 0; col < nx; ++col) {
+          // Boundaries (forward/backward difference)
+          wGrad[(nz-1)*off + row*nx + col] = (w[(nz-1)*off + row*nx + col] - w[(nz-2)*off + row*nx + col]) / (z[nz-1] - z[nz-2]);
+          wGrad[0*off + row*nx + col] = (w[1*off + row*nx + col] - w[0*off + row*nx + col]) / (z[1] - z[0]);
+          // Interior points (central difference)
+          for (int zi = 1; zi < nz - 1; ++zi) {
+            wGrad[zi*off + row*nx + col] = 0.5f * (w[(zi+1)*off + row*nx + col] - w[(zi-1)*off + row*nx + col]) / (z[zi+1] - z[zi-1]);
+          }
+        }
+      }
+    }
+    
+    void computeVelocityGradients(
+      const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
+      int nx, int ny, int nz, float dx, float dy, const std::vector<float>& z,
+      std::vector<float>& dux, std::vector<float>& duy, std::vector<float>& duz,
+      std::vector<float>& dvx, std::vector<float>& dvy, std::vector<float>& dvz,
+      std::vector<float>& dwx, std::vector<float>& dwy, std::vector<float>& dwz)
+    {
+      gradX(vel1, dux, nx, ny, nz, dx);
+      gradX(vel2, dvx, nx, ny, nz, dx);
+      gradX(vel3, dwx, nx, ny, nz, dx);
+      
+      gradY(vel1, duy, nx, ny, nz, dy);
+      gradY(vel2, dvy, nx, ny, nz, dy);
+      gradY(vel3, dwy, nx, ny, nz, dy);
+      
+      gradZ(vel1, duz, nx, ny, nz, z);
+      gradZ(vel2, dvz, nx, ny, nz, z);
+      gradZ(vel3, dwz, nx, ny, nz, z);
+    }
+    
+    void computeLambda2(const std::vector<float>& dux, const std::vector<float>& duy, const std::vector<float>& duz,
+                        const std::vector<float>& dvx, const std::vector<float>& dvy, const std::vector<float>& dvz,
+                        const std::vector<float>& dwx, const std::vector<float>& dwy, const std::vector<float>& dwz,
+                        std::vector<float>& result)
+    {
+      size_t len = dux.size();
+      for (size_t i = 0; i < len; ++i) {
+        // Strain rate tensor S = 0.5*(J + J^T)
+        float s11 = dux[i];
+        float s12 = 0.5f * (duy[i] + dvx[i]);
+        float s13 = 0.5f * (duz[i] + dwx[i]);
+        float s22 = dvy[i];
+        float s23 = 0.5f * (dvz[i] + dwy[i]);
+        float s33 = dwz[i];
+        
+        // Antisymmetric part Omega = 0.5*(J - J^T)
+        float o12 = 0.5f * (duy[i] - dvx[i]);
+        float o13 = 0.5f * (duz[i] - dwx[i]);
+        float o23 = 0.5f * (dvz[i] - dwy[i]);
+        
+        // S^2 + Omega^2
+        float m11 = s11*s11 + s12*s12 + s13*s13 - o12*o12 - o13*o13;
+        float m12 = s11*s12 + s12*s22 + s13*s23 + o12*(s11 - s22) + o13*o23;
+        float m13 = s11*s13 + s12*s23 + s13*s33 + o13*(s11 - s33) - o12*o23;
+        float m22 = s12*s12 + s22*s22 + s23*s23 - o12*o12 - o23*o23;
+        float m23 = s12*s13 + s22*s23 + s23*s33 + o23*(s22 - s33) + o12*o13;
+        float m33 = s13*s13 + s23*s23 + s33*s33 - o13*o13 - o23*o23;
+        
+        // Compute eigenvalues of 3x3 symmetric matrix
+        float p1 = m12*m12 + m13*m13 + m23*m23;
+        float q = (m11 + m22 + m33) / 3.0f;
+        float p2 = (m11 - q)*(m11 - q) + (m22 - q)*(m22 - q) + (m33 - q)*(m33 - q) + 2.0f*p1;
+        float p = std::sqrt(p2 / 6.0f);
+        
+        float b11 = (m11 - q) / p;
+        float b12 = m12 / p;
+        float b13 = m13 / p;
+        float b22 = (m22 - q) / p;
+        float b23 = m23 / p;
+        float b33 = (m33 - q) / p;
+        
+        float r = (b11*(b22*b33 - b23*b23) - b12*(b12*b33 - b23*b13) + b13*(b12*b23 - b22*b13)) / 2.0f;
+        r = std::max(-1.0f, std::min(1.0f, r));
+        
+        float phi = std::acos(r) / 3.0f;
+        float eig1 = q + 2.0f*p*std::cos(phi);
+        float eig3 = q + 2.0f*p*std::cos(phi + (2.0f*M_PI/3.0f));
+        float eig2 = 3.0f*q - eig1 - eig3; // middle eigenvalue
+        
+        result[i] = -std::min(eig2, 0.0f);
+      }
+    }
+    
+    void computeQCriterion(const std::vector<float>& dux, const std::vector<float>& duy, const std::vector<float>& duz,
+                           const std::vector<float>& dvx, const std::vector<float>& dvy, const std::vector<float>& dvz,
+                           const std::vector<float>& dwx, const std::vector<float>& dwy, const std::vector<float>& dwz,
+                           std::vector<float>& result)
+    {
+      size_t len = dux.size();
+      for (size_t i = 0; i < len; ++i) {
+        // Strain rate tensor S = 0.5*(J + J^T)
+        float s11 = dux[i];
+        float s12 = 0.5f * (duy[i] + dvx[i]);
+        float s13 = 0.5f * (duz[i] + dwx[i]);
+        float s22 = dvy[i];
+        float s23 = 0.5f * (dvz[i] + dwy[i]);
+        float s33 = dwz[i];
+        
+        // Rotation tensor Omega = 0.5*(J - J^T)
+        float o12 = 0.5f * (duy[i] - dvx[i]);
+        float o13 = 0.5f * (duz[i] - dwx[i]);
+        float o23 = 0.5f * (dvz[i] - dwy[i]);
+        
+        // Q = 0.5 * (||Omega||^2 - ||S||^2)
+        float omegaNorm2 = 2.0f * (o12*o12 + o13*o13 + o23*o23);
+        float sNorm2 = s11*s11 + s22*s22 + s33*s33 + 2.0f*(s12*s12 + s13*s13 + s23*s23);
+        
+        result[i] = std::max(0.5f * (omegaNorm2 - sNorm2), 0.0f);
+      }
+    }
+    
+    void computeVorticity(const std::vector<float>& duy, const std::vector<float>& duz,
+                          const std::vector<float>& dvx, const std::vector<float>& dvz,
+                          const std::vector<float>& dwx, const std::vector<float>& dwy,
+                          std::vector<float>& result)
+    {
+      size_t len = duy.size();
+      for (size_t i = 0; i < len; ++i) {
+        float wx = dwy[i] - dvz[i];
+        float wy = duz[i] - dwx[i];
+        float wz = dvx[i] - duy[i];
+        result[i] = std::sqrt(wx*wx + wy*wy + wz*wz);
+      }
+    }
+    
+    void computeHelicity(const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
+                         const std::vector<float>& duy, const std::vector<float>& duz,
+                         const std::vector<float>& dvx, const std::vector<float>& dvz,
+                         const std::vector<float>& dwx, const std::vector<float>& dwy,
+                         std::vector<float>& result)
+    {
+      size_t len = vel1.size();
+      for (size_t i = 0; i < len; ++i) {
+        float wx = dwy[i] - dvz[i];
+        float wy = duz[i] - dwx[i];
+        float wz = dvx[i] - duy[i];
+        
+        float helicity = std::abs(wx*vel1[i] + wy*vel2[i] + wz*vel3[i]);
+        float velMag = std::sqrt(vel1[i]*vel1[i] + vel2[i]*vel2[i] + vel3[i]*vel3[i]);
+        float vortMag = std::sqrt(wx*wx + wy*wy + wz*wz);
+        
+        if (velMag != 0.0f && vortMag != 0.0f) {
+          result[i] = helicity / (2.0f * velMag * vortMag);
+        } else {
+          result[i] = 0.0f;
+        }
+      }
+    }
+    
+  } // namespace vorticity
   
 }
