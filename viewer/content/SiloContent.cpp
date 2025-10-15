@@ -84,7 +84,8 @@ namespace hs {
                                      const std::string &meshBlockName,
                                      bool isMultiMesh,
                                      const std::string &isoExtractPath,
-                                     const std::string &mappedScalarField)
+                                     const std::string &mappedScalarField,
+                                     bool noRender)
     : fileName(fileName),
       thisPartID(thisPartID),
       cellRange(cellRange),
@@ -96,7 +97,8 @@ namespace hs {
       meshBlockName(meshBlockName),
       isMultiMesh(isMultiMesh),
       isoExtractPath(isoExtractPath),
-      mappedScalarField(mappedScalarField)
+      mappedScalarField(mappedScalarField),
+      noRender(noRender)
   {}
 
   void siloSplitKDTree(std::vector<box3i> &regions,
@@ -224,6 +226,8 @@ namespace hs {
         isoValue = std::stof(isoString);
       std::string isoExtractPath = dataURL.get("iso_extract", "");
       std::string mappedScalarField = dataURL.get("mapped_scalar", dataURL.get("ms", ""));
+      bool noRender = (dataURL.get("no_render", dataURL.get("norender", "")) == "1" || 
+                       dataURL.get("no_render", dataURL.get("norender", "")) == "true");
       
       for (int i = 0; i < meshBlockNames.size(); i++) {
         int rankID = i % numParts;
@@ -238,7 +242,8 @@ namespace hs {
                                            meshBlockNames[i],
                                            true, // isMultiMesh = true
                                            isoExtractPath,
-                                           mappedScalarField));
+                                           mappedScalarField,
+                                           noRender));
       }
       return; // Done with multi-mesh handling
     }
@@ -365,6 +370,8 @@ namespace hs {
       isoValue = std::stof(isoString);
     std::string isoExtractPath = dataURL.get("iso_extract", "");
     std::string mappedScalarField = dataURL.get("mapped_scalar", dataURL.get("ms", ""));
+    bool noRender = (dataURL.get("no_render", dataURL.get("norender", "")) == "1" || 
+                     dataURL.get("no_render", dataURL.get("norender", "")) == "true");
     
     if (variableName.empty())
       variableName = dataURL.get("var", dataURL.get("variable", ""));
@@ -379,7 +386,8 @@ namespace hs {
                                               "",  // meshBlockName (not used for single-mesh)
                                               false,  // isMultiMesh
                                               isoExtractPath,
-                                              mappedScalarField));
+                                              mappedScalarField,
+                                              noRender));
     }
   }
   
@@ -1146,17 +1154,22 @@ size_t SiloContent::projectedSize()
         }
       }
 
-      mini::Mesh::SP mesh = mini::Mesh::create();
-      for (auto vtx : surf->vertices)
-        mesh->vertices.push_back((const vec3f&)vtx);
-      for (auto idx : surf->triangles)
-        mesh->indices.push_back((const vec3i&)idx);
-      mini::Object::SP obj = mini::Object::create({mesh});
-      mini::Instance::SP inst = mini::Instance::create(obj);
-      mini::Scene::SP model = mini::Scene::create({inst});
-      
-      if (!mesh->indices.empty())
-        dataGroup.minis.push_back(model);
+      // Only add to scene for rendering if noRender is false
+      if (!noRender) {
+        mini::Mesh::SP mesh = mini::Mesh::create();
+        for (auto vtx : surf->vertices)
+          mesh->vertices.push_back((const vec3f&)vtx);
+        for (auto idx : surf->triangles)
+          mesh->indices.push_back((const vec3i&)idx);
+        mini::Object::SP obj = mini::Object::create({mesh});
+        mini::Instance::SP inst = mini::Instance::create(obj);
+        mini::Scene::SP model = mini::Scene::create({inst});
+        
+        if (!mesh->indices.empty())
+          dataGroup.minis.push_back(model);
+      } else {
+        std::cout << "#hs.silo: skipping render (no_render flag is set)" << std::endl;
+      }
     } else {
       dataGroup.structuredVolumes.push_back
         (std::make_shared<StructuredVolume>(numVoxels,texelFormat,rawData,rawDataRGB,

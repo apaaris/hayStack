@@ -44,7 +44,9 @@ namespace hs {
                      /*! if not empty, save extracted isosurface to this path */
                      const std::string &isoExtractPath = "",
                      /*! if not empty, map this scalar field to isosurface vertices */
-                     const std::string &mappedScalarField = "");
+                     const std::string &mappedScalarField = "",
+                     /*! if true, skip adding isosurface to scene (for export-only mode) */
+                     bool noRender = false);
     
     static void create(DataLoader *loader,
                        const ResourceSpecifier &dataURL);
@@ -65,6 +67,7 @@ namespace hs {
     const bool          isMultiMesh;
     const std::string   isoExtractPath;
     const std::string   mappedScalarField;
+    const bool          noRender;
   };
   
 }
