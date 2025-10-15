@@ -816,40 +816,157 @@ size_t SiloContent::projectedSize()
       bool haveMappedScalars = false;
       if (!mappedScalarField.empty() && mappedScalarField[0] != ':') {
 #ifdef HS_HAVE_SILO
-        // Reopen the file to load the mapped scalar field
-        DBfile *dbfile2 = DBOpen(fileToOpen.c_str(), DB_UNKNOWN, DB_READ);
-        if (dbfile2) {
-          DBquadvar *qvar2 = DBGetQuadvar(dbfile2, mappedScalarField.c_str());
-          if (qvar2) {
-            std::cout << "#hs.silo: loading mapped scalar field '" << mappedScalarField << "'" << std::endl;
-            void *srcData2 = qvar2->vals[0];
-            int datatype2 = qvar2->datatype;
+        // Check if this is a derived variable
+        bool isMappedDerivedVar = (mappedScalarField == "lambda2" || mappedScalarField == "qCriterion" || 
+                                   mappedScalarField == "vorticity" || mappedScalarField == "helicity" ||
+                                   mappedScalarField == "vel_mag");
+        
+        if (isMappedDerivedVar) {
+          // Compute derived field for mapped scalar
+          std::cout << "#hs.silo: computing derived mapped scalar field '" << mappedScalarField << "' from velocity components" << std::endl;
+          
+          // Reopen the file to load velocity components
+          DBfile *dbfile2 = DBOpen(fileToOpen.c_str(), DB_UNKNOWN, DB_READ);
+          if (dbfile2) {
+            size_t numScalars = numVoxels.x * numVoxels.y * numVoxels.z;
+            std::vector<float> vel1Data(numScalars), vel2Data(numScalars), vel3Data(numScalars);
             
-            mappedScalarVolume.resize(numVoxels.x * numVoxels.y * numVoxels.z);
-            size_t idx = 0;
-            for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
-              for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
-                for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
-                  size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
-                  
-                  if (datatype2 == DB_FLOAT) {
-                    mappedScalarVolume[idx] = ((float*)srcData2)[srcIdx];
-                  } else if (datatype2 == DB_DOUBLE) {
-                    mappedScalarVolume[idx] = (float)((double*)srcData2)[srcIdx];
-                  } else if (datatype2 == DB_INT) {
-                    mappedScalarVolume[idx] = (float)((int*)srcData2)[srcIdx];
+            // Load vel1
+            DBquadvar *qvar1 = DBGetQuadvar(dbfile2, "vel1");
+            if (qvar1) {
+              void *srcData1 = qvar1->vals[0];
+              int datatype1 = qvar1->datatype;
+              size_t idx = 0;
+              for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                  for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                    size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                    if (datatype1 == DB_FLOAT) vel1Data[idx] = ((float*)srcData1)[srcIdx];
+                    else if (datatype1 == DB_DOUBLE) vel1Data[idx] = (float)((double*)srcData1)[srcIdx];
+                    else if (datatype1 == DB_INT) vel1Data[idx] = (float)((int*)srcData1)[srcIdx];
+                    idx++;
                   }
-                  idx++;
                 }
               }
+              DBFreeQuadvar(qvar1);
             }
+            
+            // Load vel2
+            DBquadvar *qvar2 = DBGetQuadvar(dbfile2, "vel2");
+            if (qvar2) {
+              void *srcData2 = qvar2->vals[0];
+              int datatype2 = qvar2->datatype;
+              size_t idx = 0;
+              for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                  for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                    size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                    if (datatype2 == DB_FLOAT) vel2Data[idx] = ((float*)srcData2)[srcIdx];
+                    else if (datatype2 == DB_DOUBLE) vel2Data[idx] = (float)((double*)srcData2)[srcIdx];
+                    else if (datatype2 == DB_INT) vel2Data[idx] = (float)((int*)srcData2)[srcIdx];
+                    idx++;
+                  }
+                }
+              }
+              DBFreeQuadvar(qvar2);
+            }
+            
+            // Load vel3
+            DBquadvar *qvar3 = DBGetQuadvar(dbfile2, "vel3");
+            if (qvar3) {
+              void *srcData3 = qvar3->vals[0];
+              int datatype3 = qvar3->datatype;
+              size_t idx = 0;
+              for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                  for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                    size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                    if (datatype3 == DB_FLOAT) vel3Data[idx] = ((float*)srcData3)[srcIdx];
+                    else if (datatype3 == DB_DOUBLE) vel3Data[idx] = (float)((double*)srcData3)[srcIdx];
+                    else if (datatype3 == DB_INT) vel3Data[idx] = (float)((int*)srcData3)[srcIdx];
+                    idx++;
+                  }
+                }
+              }
+              DBFreeQuadvar(qvar3);
+            }
+            
+            // Compute the derived field
+            mappedScalarVolume.resize(numScalars);
+            
+            if (mappedScalarField == "vel_mag") {
+              // Velocity magnitude
+              for (size_t i = 0; i < numScalars; i++) {
+                mappedScalarVolume[i] = std::sqrt(vel1Data[i]*vel1Data[i] + vel2Data[i]*vel2Data[i] + vel3Data[i]*vel3Data[i]);
+              }
+            } else {
+              // Need gradients for other derived variables
+              std::vector<float> dux(numScalars), duy(numScalars), duz(numScalars);
+              std::vector<float> dvx(numScalars), dvy(numScalars), dvz(numScalars);
+              std::vector<float> dwx(numScalars), dwy(numScalars), dwz(numScalars);
+              
+              // Build z coordinate array for non-uniform spacing
+              std::vector<float> zCoords(numVoxels.z);
+              for (int i = 0; i < numVoxels.z; i++) {
+                zCoords[i] = gridOrigin.z + i * gridSpacing.z;
+              }
+              
+              vorticity::computeVelocityGradients(vel1Data, vel2Data, vel3Data,
+                                                 numVoxels.x, numVoxels.y, numVoxels.z,
+                                                 gridSpacing.x, gridSpacing.y, zCoords,
+                                                 dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz);
+              
+              if (mappedScalarField == "lambda2") {
+                vorticity::computeLambda2(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, mappedScalarVolume);
+              } else if (mappedScalarField == "qCriterion") {
+                vorticity::computeQCriterion(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, mappedScalarVolume);
+              } else if (mappedScalarField == "vorticity") {
+                vorticity::computeVorticity(duy, duz, dvx, dvz, dwx, dwy, mappedScalarVolume);
+              } else if (mappedScalarField == "helicity") {
+                vorticity::computeHelicity(vel1Data, vel2Data, vel3Data, duy, duz, dvx, dvz, dwx, dwy, mappedScalarVolume);
+              }
+            }
+            
             haveMappedScalars = true;
-            DBFreeQuadvar(qvar2);
-          } else {
-            std::cout << "#hs.silo: WARNING - could not load mapped scalar field '" 
-                      << mappedScalarField << "'" << std::endl;
+            std::cout << "#hs.silo: computed mapped scalar field '" << mappedScalarField << "'" << std::endl;
+            DBClose(dbfile2);
           }
-          DBClose(dbfile2);
+        } else {
+          // Regular (non-derived) field - load directly from file
+          DBfile *dbfile2 = DBOpen(fileToOpen.c_str(), DB_UNKNOWN, DB_READ);
+          if (dbfile2) {
+            DBquadvar *qvar2 = DBGetQuadvar(dbfile2, mappedScalarField.c_str());
+            if (qvar2) {
+              std::cout << "#hs.silo: loading mapped scalar field '" << mappedScalarField << "'" << std::endl;
+              void *srcData2 = qvar2->vals[0];
+              int datatype2 = qvar2->datatype;
+              
+              mappedScalarVolume.resize(numVoxels.x * numVoxels.y * numVoxels.z);
+              size_t idx = 0;
+              for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                  for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                    size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                    
+                    if (datatype2 == DB_FLOAT) {
+                      mappedScalarVolume[idx] = ((float*)srcData2)[srcIdx];
+                    } else if (datatype2 == DB_DOUBLE) {
+                      mappedScalarVolume[idx] = (float)((double*)srcData2)[srcIdx];
+                    } else if (datatype2 == DB_INT) {
+                      mappedScalarVolume[idx] = (float)((int*)srcData2)[srcIdx];
+                    }
+                    idx++;
+                  }
+                }
+              }
+              haveMappedScalars = true;
+              DBFreeQuadvar(qvar2);
+            } else {
+              std::cout << "#hs.silo: WARNING - could not load mapped scalar field '" 
+                        << mappedScalarField << "'" << std::endl;
+            }
+            DBClose(dbfile2);
+          }
         }
 #endif
       }
