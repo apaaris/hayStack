@@ -847,6 +847,17 @@ int main(int ac, char **av)
     std::cout << "done mergine umeshes..." << std::endl;
   }
 
+  // If no_render flag is set, exit after all isosurfaces have been exported
+  if (loader.shouldExitAfterLoading) {
+    world.barrier();
+    if (world.rank == 0) {
+      std::cout << "#hs: no_render mode - all isosurfaces exported, exiting..." << std::endl;
+    }
+    world.barrier();
+    hs::mpi::finalize();
+    exit(0);
+  }
+
   int numDataGroupsLocally = thisRankData.size();
   world.barrier();
   HayMaker *hayMaker

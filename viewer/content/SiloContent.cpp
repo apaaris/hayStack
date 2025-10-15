@@ -229,6 +229,14 @@ namespace hs {
       bool noRender = (dataURL.get("no_render", dataURL.get("norender", "")) == "1" || 
                        dataURL.get("no_render", dataURL.get("norender", "")) == "true");
       
+      // Signal that we should exit after loading if no_render is set
+      if (noRender) {
+        loader->shouldExitAfterLoading = true;
+        if (loader->myRank() == 0) {
+          std::cout << "#hs.silo: no_render flag is set - will exit after isosurface export completes" << std::endl;
+        }
+      }
+      
       for (int i = 0; i < meshBlockNames.size(); i++) {
         int rankID = i % numParts;
         // Use block index 'i' as the processor ID for consistent numbering
@@ -372,6 +380,14 @@ namespace hs {
     std::string mappedScalarField = dataURL.get("mapped_scalar", dataURL.get("ms", ""));
     bool noRender = (dataURL.get("no_render", dataURL.get("norender", "")) == "1" || 
                      dataURL.get("no_render", dataURL.get("norender", "")) == "true");
+    
+    // Signal that we should exit after loading if no_render is set
+    if (noRender) {
+      loader->shouldExitAfterLoading = true;
+      if (loader->myRank() == 0) {
+        std::cout << "#hs.silo: no_render flag is set - will exit after isosurface export completes" << std::endl;
+      }
+    }
     
     if (variableName.empty())
       variableName = dataURL.get("var", dataURL.get("variable", ""));

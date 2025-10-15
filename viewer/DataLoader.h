@@ -106,6 +106,8 @@ namespace hs {
     } sharedLights;
     /*! default radius to use for spheres that do not have a radius specified */
     static float defaultRadius;
+    /*! flag to indicate if the program should exit after loading (e.g., for export-only mode) */
+    bool shouldExitAfterLoading = false;
     hs::mpi::Comm workers;
   };
 
