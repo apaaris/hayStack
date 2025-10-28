@@ -101,6 +101,7 @@ if (HS_VIEWER AND (TARGET barney))
     PUBLIC
     hayStack
     owl_viewer
+    agx
     )
   target_compile_definitions(hsViewer PUBLIC -DHS_VIEWER=1)
   if (WIN32)
@@ -125,6 +126,7 @@ add_executable(hsOffline
 target_link_libraries(hsOffline
   PUBLIC
   hayStack
+  agx
   )
 if(SILO_FOUND)
   target_include_directories(hsOffline PRIVATE ${SILO_INCLUDE_DIR})
@@ -146,6 +148,7 @@ if (HS_CUTEE)
     PUBLIC
     hayStack
     qtOWL
+    agx
     )
   target_compile_definitions(hsViewerQT PUBLIC -DHS_CUTEE=1)
   if(SILO_FOUND)

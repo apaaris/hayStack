@@ -24,6 +24,8 @@
 #include <umesh/UMesh.h>
 #include <umesh/extractIsoSurface.h>
 #include <miniScene/Scene.h>
+#define AGX_WRITE_IMPL
+#include "agx/agx_write.h"
 
 // Forward declarations for derived velocity field computations
 namespace hs {
@@ -84,6 +86,7 @@ namespace hs {
                                      const std::string &meshBlockName,
                                      bool isMultiMesh,
                                      const std::string &isoExtractPath,
+                                     const std::string &isoAgxPath,
                                      const std::string &mappedScalarField,
                                      bool noRender)
     : fileName(fileName),
@@ -97,6 +100,7 @@ namespace hs {
       meshBlockName(meshBlockName),
       isMultiMesh(isMultiMesh),
       isoExtractPath(isoExtractPath),
+      isoAgxPath(isoAgxPath),
       mappedScalarField(mappedScalarField),
       noRender(noRender)
   {}
@@ -225,6 +229,7 @@ namespace hs {
       if (!isoString.empty())
         isoValue = std::stof(isoString);
       std::string isoExtractPath = dataURL.get("iso_extract", "");
+      std::string isoAgxPath = dataURL.get("iso_agx", "");
       std::string mappedScalarField = dataURL.get("mapped_scalar", dataURL.get("ms", ""));
       bool noRender = (dataURL.get("no_render", dataURL.get("norender", "")) == "1" || 
                        dataURL.get("no_render", dataURL.get("norender", "")) == "true");
@@ -250,6 +255,7 @@ namespace hs {
                                            meshBlockNames[i],
                                            true, // isMultiMesh = true
                                            isoExtractPath,
+                                           isoAgxPath,
                                            mappedScalarField,
                                            noRender));
       }
@@ -377,6 +383,7 @@ namespace hs {
     if (!isoString.empty())
       isoValue = std::stof(isoString);
     std::string isoExtractPath = dataURL.get("iso_extract", "");
+    std::string isoAgxPath = dataURL.get("iso_agx", "");
     std::string mappedScalarField = dataURL.get("mapped_scalar", dataURL.get("ms", ""));
     bool noRender = (dataURL.get("no_render", dataURL.get("norender", "")) == "1" || 
                      dataURL.get("no_render", dataURL.get("norender", "")) == "true");
@@ -402,6 +409,7 @@ namespace hs {
                                               "",  // meshBlockName (not used for single-mesh)
                                               false,  // isMultiMesh
                                               isoExtractPath,
+                                              isoAgxPath,
                                               mappedScalarField,
                                               noRender));
     }
@@ -1168,6 +1176,176 @@ size_t SiloContent::projectedSize()
           std::cout << "#hs.silo: saved " << surf->triangles.size() << " triangles and " 
                     << surf->vertices.size() << " vertices" << std::endl;
         }
+      }
+      
+      // Save isosurface to AGX file if iso_agx path is specified
+      if (!isoAgxPath.empty()) {
+        // Create output filename: outPath/iso_field_timestep.processor.agxb
+        std::string outputFilePath = isoAgxPath;
+        // Ensure the path ends with a separator
+        if (!outputFilePath.empty() && outputFilePath.back() != '/' && outputFilePath.back() != '\\') {
+          outputFilePath += "/";
+        }
+        
+        // Get field name (variable name or "unknown")
+        std::string fieldName = variableName.empty() ? "unknown" : variableName;
+        // Remove any path prefix from field name
+        size_t lastSlash = fieldName.find_last_of("/\\");
+        if (lastSlash != std::string::npos && lastSlash + 1 < fieldName.length()) {
+          fieldName = fieldName.substr(lastSlash + 1);
+        }
+        
+        // Extract timestep from meshBlockName or fileName
+        std::string timestep = "0";
+        std::string processorId = std::to_string(thisPartID);
+        
+        if (isMultiMesh) {
+          std::string blockName = meshBlockName;
+          size_t siloPos = blockName.find(".silo");
+          if (siloPos != std::string::npos) {
+            size_t numEnd = siloPos;
+            size_t numStart = siloPos;
+            while (numStart > 0 && std::isdigit(blockName[numStart - 1])) {
+              numStart--;
+            }
+            if (numStart < numEnd) {
+              timestep = blockName.substr(numStart, numEnd - numStart);
+            }
+          }
+        } else {
+          std::string baseName = fileName;
+          size_t siloPos = baseName.find(".silo");
+          if (siloPos != std::string::npos) {
+            size_t numEnd = siloPos;
+            size_t numStart = siloPos;
+            while (numStart > 0 && std::isdigit(baseName[numStart - 1])) {
+              numStart--;
+            }
+            if (numStart < numEnd) {
+              timestep = baseName.substr(numStart, numEnd - numStart);
+            }
+          }
+        }
+        
+        // Construct filename: iso_field_timestep.processor.agx
+        outputFilePath += "iso_" + fieldName + "_" + timestep + "." + processorId + ".agx";
+        
+        std::cout << "#hs.silo: writing isosurface in AGX format to " << outputFilePath << std::endl;
+        
+        // Create AGX exporter
+        AGXExporter exporter = agxNewExporter();
+        agxSetObjectSubtype(exporter, "triangle");
+        
+        // Set time step count (single timestep for now)
+        agxSetTimeStepCount(exporter, 1);
+        
+        // Convert triangle indices to uint32_t array for AGX
+        // AGX expects vec3 of indices, so element count = number of triangles
+        std::vector<uint32_t> indices;
+        indices.reserve(surf->triangles.size() * 3);
+        for (const auto &tri : surf->triangles) {
+          indices.push_back(static_cast<uint32_t>(tri.x));
+          indices.push_back(static_cast<uint32_t>(tri.y));
+          indices.push_back(static_cast<uint32_t>(tri.z));
+        }
+        
+        // Set constant triangle indices (same for all time steps)
+        agxSetParameterArray1D(exporter, "primitive.index", ANARI_UINT32_VEC3, 
+                               indices.data(), surf->triangles.size());
+        
+        // Convert vertex positions to float array
+        std::vector<float> positions;
+        positions.reserve(surf->vertices.size() * 3);
+        for (const auto &v : surf->vertices) {
+          positions.push_back(v.x);
+          positions.push_back(v.y);
+          positions.push_back(v.z);
+        }
+        
+        // Set per-timestep vertex positions
+        agxSetTimeStepParameterArray1D(exporter, 0, "vertex.position", ANARI_FLOAT32_VEC3,
+                                       positions.data(), surf->vertices.size());
+        
+        // If we have a mapped scalar field, compute and add it
+        if (!mappedScalarField.empty()) {
+          std::vector<float> scalars;
+          scalars.reserve(surf->vertices.size());
+          
+          if (mappedScalarField == ":x") {
+            for (const auto &v : surf->vertices)
+              scalars.push_back(v.x);
+          } else if (mappedScalarField == ":y") {
+            for (const auto &v : surf->vertices)
+              scalars.push_back(v.y);
+          } else if (mappedScalarField == ":z") {
+            for (const auto &v : surf->vertices)
+              scalars.push_back(v.z);
+          } else if (haveMappedScalars) {
+            // Trilinear interpolation of the mapped scalar field
+            for (const auto &v : surf->vertices) {
+              umesh::vec3f gridPos = (v - (const umesh::vec3f&)gridOrigin) / (const umesh::vec3f&)gridSpacing;
+              
+              gridPos.x = std::max(0.f, std::min((float)(numVoxels.x - 1), gridPos.x));
+              gridPos.y = std::max(0.f, std::min((float)(numVoxels.y - 1), gridPos.y));
+              gridPos.z = std::max(0.f, std::min((float)(numVoxels.z - 1), gridPos.z));
+              
+              int ix0 = (int)std::floor(gridPos.x), ix1 = std::min(ix0 + 1, numVoxels.x - 1);
+              int iy0 = (int)std::floor(gridPos.y), iy1 = std::min(iy0 + 1, numVoxels.y - 1);
+              int iz0 = (int)std::floor(gridPos.z), iz1 = std::min(iz0 + 1, numVoxels.z - 1);
+              
+              float fx = gridPos.x - ix0;
+              float fy = gridPos.y - iy0;
+              float fz = gridPos.z - iz0;
+              
+              auto getVal = [&](int ix, int iy, int iz) {
+                return mappedScalarVolume[ix + iy * numVoxels.x + iz * numVoxels.x * numVoxels.y];
+              };
+              
+              float v000 = getVal(ix0, iy0, iz0);
+              float v001 = getVal(ix1, iy0, iz0);
+              float v010 = getVal(ix0, iy1, iz0);
+              float v011 = getVal(ix1, iy1, iz0);
+              float v100 = getVal(ix0, iy0, iz1);
+              float v101 = getVal(ix1, iy0, iz1);
+              float v110 = getVal(ix0, iy1, iz1);
+              float v111 = getVal(ix1, iy1, iz1);
+              
+              float v00 = v000 * (1 - fx) + v001 * fx;
+              float v01 = v010 * (1 - fx) + v011 * fx;
+              float v10 = v100 * (1 - fx) + v101 * fx;
+              float v11 = v110 * (1 - fx) + v111 * fx;
+              
+              float v0 = v00 * (1 - fy) + v01 * fy;
+              float v1 = v10 * (1 - fy) + v11 * fy;
+              
+              float interpolated = v0 * (1 - fz) + v1 * fz;
+              scalars.push_back(interpolated);
+            }
+          } else {
+            std::cout << "#hs.silo: WARNING - mapped scalar field '" << mappedScalarField 
+                      << "' could not be loaded, using isoValue" << std::endl;
+            for (size_t i = 0; i < surf->vertices.size(); i++)
+              scalars.push_back(isoValue);
+          }
+          
+          // Add scalar field as per-timestep attribute
+          agxSetTimeStepParameterArray1D(exporter, 0, "vertex.attribute", ANARI_FLOAT32,
+                                         scalars.data(), scalars.size());
+          
+          std::cout << "#hs.silo: mapped scalar field: " << mappedScalarField << std::endl;
+        }
+        
+        // Write AGX file
+        int rc = agxWrite(exporter, outputFilePath.c_str());
+        if (rc == 0) {
+          std::cout << "#hs.silo: saved " << surf->triangles.size() << " triangles and " 
+                    << surf->vertices.size() << " vertices to AGX file" << std::endl;
+        } else {
+          std::cerr << "#hs.silo: ERROR - failed to write AGX file (error code " << rc << ")" << std::endl;
+        }
+        
+        // Release exporter
+        agxReleaseExporter(exporter);
       }
 
       // Only add to scene for rendering if noRender is false

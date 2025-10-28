@@ -41,8 +41,10 @@ namespace hs {
                      const std::string &meshBlockName = "",
                      /*! whether this is a multi-mesh file */
                      bool isMultiMesh = false,
-                     /*! if not empty, save extracted isosurface to this path */
+                     /*! if not empty, save extracted isosurface to this path (numpy format) */
                      const std::string &isoExtractPath = "",
+                     /*! if not empty, save extracted isosurface to this path (AGX format) */
+                     const std::string &isoAgxPath = "",
                      /*! if not empty, map this scalar field to isosurface vertices */
                      const std::string &mappedScalarField = "",
                      /*! if true, skip adding isosurface to scene (for export-only mode) */
@@ -66,6 +68,7 @@ namespace hs {
     const std::string   meshBlockName;
     const bool          isMultiMesh;
     const std::string   isoExtractPath;
+    const std::string   isoAgxPath;
     const std::string   mappedScalarField;
     const bool          noRender;
   };

@@ -10,3 +10,6 @@
 [submodule "submodules/tinyAMR"]
 	path = submodules/tinyAMR
 	url = https://github.com/ingowald/tinyAMR
+[submodule "submodules/agx"]
+	path = submodules/agx
+	url = https://github.com/jeffamstutz/agx.git
