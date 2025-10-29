@@ -60,6 +60,14 @@ namespace hs {
                          const std::vector<float>& dvx, const std::vector<float>& dvz,
                          const std::vector<float>& dwx, const std::vector<float>& dwy,
                          std::vector<float>& result);
+    
+    // Specialized gradient computation for vorticity/helicity that only computes needed gradients
+    void computeVorticityGradients(
+      const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
+      int nx, int ny, int nz, float dx, float dy, const std::vector<float>& z,
+      std::vector<float>& duy, std::vector<float>& duz,
+      std::vector<float>& dvx, std::vector<float>& dvz,
+      std::vector<float>& dwx, std::vector<float>& dwy);
   }
 }
 
@@ -933,14 +941,36 @@ size_t SiloContent::projectedSize()
       void *srcData2 = qvar2->vals[0];
       int datatype2 = qvar2->datatype;
       size_t idx = 0;
-      for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
-        for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
-          for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
-            size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
-            if (datatype2 == DB_FLOAT) vel2Data[idx] = ((float*)srcData2)[srcIdx];
-            else if (datatype2 == DB_DOUBLE) vel2Data[idx] = (float)((double*)srcData2)[srcIdx];
-            else if (datatype2 == DB_INT) vel2Data[idx] = (float)((int*)srcData2)[srcIdx];
-            idx++;
+      
+      // Check type once and use appropriate cast throughout
+      if (datatype2 == DB_FLOAT) {
+        float *typedSrc = (float*)srcData2;
+        for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+          for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+            for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+              size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+              vel2Data[idx++] = typedSrc[srcIdx];
+            }
+          }
+        }
+      } else if (datatype2 == DB_DOUBLE) {
+        double *typedSrc = (double*)srcData2;
+        for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+          for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+            for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+              size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+              vel2Data[idx++] = (float)typedSrc[srcIdx];
+            }
+          }
+        }
+      } else if (datatype2 == DB_INT) {
+        int *typedSrc = (int*)srcData2;
+        for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+          for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+            for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+              size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+              vel2Data[idx++] = (float)typedSrc[srcIdx];
+            }
           }
         }
       }
@@ -953,14 +983,36 @@ size_t SiloContent::projectedSize()
       void *srcData3 = qvar3->vals[0];
       int datatype3 = qvar3->datatype;
       idx = 0;
-      for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
-        for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
-          for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
-            size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
-            if (datatype3 == DB_FLOAT) vel3Data[idx] = ((float*)srcData3)[srcIdx];
-            else if (datatype3 == DB_DOUBLE) vel3Data[idx] = (float)((double*)srcData3)[srcIdx];
-            else if (datatype3 == DB_INT) vel3Data[idx] = (float)((int*)srcData3)[srcIdx];
-            idx++;
+      
+      // Check type once and use appropriate cast throughout
+      if (datatype3 == DB_FLOAT) {
+        float *typedSrc = (float*)srcData3;
+        for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+          for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+            for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+              size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+              vel3Data[idx++] = typedSrc[srcIdx];
+            }
+          }
+        }
+      } else if (datatype3 == DB_DOUBLE) {
+        double *typedSrc = (double*)srcData3;
+        for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+          for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+            for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+              size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+              vel3Data[idx++] = (float)typedSrc[srcIdx];
+            }
+          }
+        }
+      } else if (datatype3 == DB_INT) {
+        int *typedSrc = (int*)srcData3;
+        for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+          for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+            for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+              size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+              vel3Data[idx++] = (float)typedSrc[srcIdx];
+            }
           }
         }
       }
@@ -976,12 +1028,12 @@ size_t SiloContent::projectedSize()
       std::vector<float> derivedData(numScalars);
       
       if (requestedVar == "vel_mag") {
-        // Velocity magnitude
+        // Velocity magnitude - no gradients needed
         for (size_t i = 0; i < numScalars; i++) {
           derivedData[i] = std::sqrt(vel1Data[i]*vel1Data[i] + vel2Data[i]*vel2Data[i] + vel3Data[i]*vel3Data[i]);
         }
-      } else {
-        // Need gradients for other derived variables
+      } else if (requestedVar == "lambda2" || requestedVar == "qCriterion") {
+        // These fields need all 9 gradient components
         std::vector<float> dux(numScalars), duy(numScalars), duz(numScalars);
         std::vector<float> dvx(numScalars), dvy(numScalars), dvz(numScalars);
         std::vector<float> dwx(numScalars), dwy(numScalars), dwz(numScalars);
@@ -993,11 +1045,23 @@ size_t SiloContent::projectedSize()
         
         if (requestedVar == "lambda2") {
           vorticity::computeLambda2(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, derivedData);
-        } else if (requestedVar == "qCriterion") {
+        } else {
           vorticity::computeQCriterion(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, derivedData);
-        } else if (requestedVar == "vorticity") {
+        }
+      } else if (requestedVar == "vorticity" || requestedVar == "helicity") {
+        // These fields only need 6 gradient components - use specialized function
+        std::vector<float> duy(numScalars), duz(numScalars);
+        std::vector<float> dvx(numScalars), dvz(numScalars);
+        std::vector<float> dwx(numScalars), dwy(numScalars);
+        
+        vorticity::computeVorticityGradients(vel1Data, vel2Data, vel3Data,
+                                            numVoxels.x, numVoxels.y, numVoxels.z,
+                                            meshSpacing.x, meshSpacing.y, zCoords,
+                                            duy, duz, dvx, dvz, dwx, dwy);
+        
+        if (requestedVar == "vorticity") {
           vorticity::computeVorticity(duy, duz, dvx, dvz, dwx, dwy, derivedData);
-        } else if (requestedVar == "helicity") {
+        } else {
           vorticity::computeHelicity(vel1Data, vel2Data, vel3Data, duy, duz, dvx, dvz, dwx, dwy, derivedData);
         }
       }
@@ -1125,14 +1189,36 @@ size_t SiloContent::projectedSize()
               void *srcData1 = qvar1->vals[0];
               int datatype1 = qvar1->datatype;
               size_t idx = 0;
-              for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
-                for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
-                  for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
-                    size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
-                    if (datatype1 == DB_FLOAT) vel1Data[idx] = ((float*)srcData1)[srcIdx];
-                    else if (datatype1 == DB_DOUBLE) vel1Data[idx] = (float)((double*)srcData1)[srcIdx];
-                    else if (datatype1 == DB_INT) vel1Data[idx] = (float)((int*)srcData1)[srcIdx];
-                    idx++;
+              
+              // Check type once and use appropriate cast throughout
+              if (datatype1 == DB_FLOAT) {
+                float *typedSrc = (float*)srcData1;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      vel1Data[idx++] = typedSrc[srcIdx];
+                    }
+                  }
+                }
+              } else if (datatype1 == DB_DOUBLE) {
+                double *typedSrc = (double*)srcData1;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      vel1Data[idx++] = (float)typedSrc[srcIdx];
+                    }
+                  }
+                }
+              } else if (datatype1 == DB_INT) {
+                int *typedSrc = (int*)srcData1;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      vel1Data[idx++] = (float)typedSrc[srcIdx];
+                    }
                   }
                 }
               }
@@ -1145,14 +1231,36 @@ size_t SiloContent::projectedSize()
               void *srcData2 = qvar2->vals[0];
               int datatype2 = qvar2->datatype;
               size_t idx = 0;
-              for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
-                for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
-                  for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
-                    size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
-                    if (datatype2 == DB_FLOAT) vel2Data[idx] = ((float*)srcData2)[srcIdx];
-                    else if (datatype2 == DB_DOUBLE) vel2Data[idx] = (float)((double*)srcData2)[srcIdx];
-                    else if (datatype2 == DB_INT) vel2Data[idx] = (float)((int*)srcData2)[srcIdx];
-                    idx++;
+              
+              // Check type once and use appropriate cast throughout
+              if (datatype2 == DB_FLOAT) {
+                float *typedSrc = (float*)srcData2;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      vel2Data[idx++] = typedSrc[srcIdx];
+                    }
+                  }
+                }
+              } else if (datatype2 == DB_DOUBLE) {
+                double *typedSrc = (double*)srcData2;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      vel2Data[idx++] = (float)typedSrc[srcIdx];
+                    }
+                  }
+                }
+              } else if (datatype2 == DB_INT) {
+                int *typedSrc = (int*)srcData2;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      vel2Data[idx++] = (float)typedSrc[srcIdx];
+                    }
                   }
                 }
               }
@@ -1165,14 +1273,36 @@ size_t SiloContent::projectedSize()
               void *srcData3 = qvar3->vals[0];
               int datatype3 = qvar3->datatype;
               size_t idx = 0;
-              for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
-                for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
-                  for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
-                    size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
-                    if (datatype3 == DB_FLOAT) vel3Data[idx] = ((float*)srcData3)[srcIdx];
-                    else if (datatype3 == DB_DOUBLE) vel3Data[idx] = (float)((double*)srcData3)[srcIdx];
-                    else if (datatype3 == DB_INT) vel3Data[idx] = (float)((int*)srcData3)[srcIdx];
-                    idx++;
+              
+              // Check type once and use appropriate cast throughout
+              if (datatype3 == DB_FLOAT) {
+                float *typedSrc = (float*)srcData3;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      vel3Data[idx++] = typedSrc[srcIdx];
+                    }
+                  }
+                }
+              } else if (datatype3 == DB_DOUBLE) {
+                double *typedSrc = (double*)srcData3;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      vel3Data[idx++] = (float)typedSrc[srcIdx];
+                    }
+                  }
+                }
+              } else if (datatype3 == DB_INT) {
+                int *typedSrc = (int*)srcData3;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      vel3Data[idx++] = (float)typedSrc[srcIdx];
+                    }
                   }
                 }
               }
@@ -1183,35 +1313,49 @@ size_t SiloContent::projectedSize()
             mappedScalarVolume.resize(numScalars);
             
             if (mappedScalarField == "vel_mag") {
-              // Velocity magnitude
+              // Velocity magnitude - no gradients needed
               for (size_t i = 0; i < numScalars; i++) {
                 mappedScalarVolume[i] = std::sqrt(vel1Data[i]*vel1Data[i] + vel2Data[i]*vel2Data[i] + vel3Data[i]*vel3Data[i]);
               }
             } else {
-              // Need gradients for other derived variables
-              std::vector<float> dux(numScalars), duy(numScalars), duz(numScalars);
-              std::vector<float> dvx(numScalars), dvy(numScalars), dvz(numScalars);
-              std::vector<float> dwx(numScalars), dwy(numScalars), dwz(numScalars);
-              
               // Build z coordinate array for non-uniform spacing
               std::vector<float> zCoords(numVoxels.z);
               for (int i = 0; i < numVoxels.z; i++) {
                 zCoords[i] = gridOrigin.z + i * gridSpacing.z;
               }
               
-              vorticity::computeVelocityGradients(vel1Data, vel2Data, vel3Data,
-                                                 numVoxels.x, numVoxels.y, numVoxels.z,
-                                                 gridSpacing.x, gridSpacing.y, zCoords,
-                                                 dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz);
-              
-              if (mappedScalarField == "lambda2") {
-                vorticity::computeLambda2(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, mappedScalarVolume);
-              } else if (mappedScalarField == "qCriterion") {
-                vorticity::computeQCriterion(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, mappedScalarVolume);
-              } else if (mappedScalarField == "vorticity") {
-                vorticity::computeVorticity(duy, duz, dvx, dvz, dwx, dwy, mappedScalarVolume);
-              } else if (mappedScalarField == "helicity") {
-                vorticity::computeHelicity(vel1Data, vel2Data, vel3Data, duy, duz, dvx, dvz, dwx, dwy, mappedScalarVolume);
+              if (mappedScalarField == "lambda2" || mappedScalarField == "qCriterion") {
+                // These fields need all 9 gradient components
+                std::vector<float> dux(numScalars), duy(numScalars), duz(numScalars);
+                std::vector<float> dvx(numScalars), dvy(numScalars), dvz(numScalars);
+                std::vector<float> dwx(numScalars), dwy(numScalars), dwz(numScalars);
+                
+                vorticity::computeVelocityGradients(vel1Data, vel2Data, vel3Data,
+                                                   numVoxels.x, numVoxels.y, numVoxels.z,
+                                                   gridSpacing.x, gridSpacing.y, zCoords,
+                                                   dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz);
+                
+                if (mappedScalarField == "lambda2") {
+                  vorticity::computeLambda2(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, mappedScalarVolume);
+                } else {
+                  vorticity::computeQCriterion(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, mappedScalarVolume);
+                }
+              } else if (mappedScalarField == "vorticity" || mappedScalarField == "helicity") {
+                // These fields only need 6 gradient components - use specialized function
+                std::vector<float> duy(numScalars), duz(numScalars);
+                std::vector<float> dvx(numScalars), dvz(numScalars);
+                std::vector<float> dwx(numScalars), dwy(numScalars);
+                
+                vorticity::computeVorticityGradients(vel1Data, vel2Data, vel3Data,
+                                                    numVoxels.x, numVoxels.y, numVoxels.z,
+                                                    gridSpacing.x, gridSpacing.y, zCoords,
+                                                    duy, duz, dvx, dvz, dwx, dwy);
+                
+                if (mappedScalarField == "vorticity") {
+                  vorticity::computeVorticity(duy, duz, dvx, dvz, dwx, dwy, mappedScalarVolume);
+                } else {
+                  vorticity::computeHelicity(vel1Data, vel2Data, vel3Data, duy, duz, dvx, dvz, dwx, dwy, mappedScalarVolume);
+                }
               }
             }
             
@@ -1229,19 +1373,36 @@ size_t SiloContent::projectedSize()
               
               mappedScalarVolume.resize(numVoxels.x * numVoxels.y * numVoxels.z);
               size_t idx = 0;
-              for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
-                for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
-                  for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
-                    size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
-                    
-                    if (datatype2 == DB_FLOAT) {
-                      mappedScalarVolume[idx] = ((float*)srcData2)[srcIdx];
-                    } else if (datatype2 == DB_DOUBLE) {
-                      mappedScalarVolume[idx] = (float)((double*)srcData2)[srcIdx];
-                    } else if (datatype2 == DB_INT) {
-                      mappedScalarVolume[idx] = (float)((int*)srcData2)[srcIdx];
+              
+              // Check type once and use appropriate cast throughout
+              if (datatype2 == DB_FLOAT) {
+                float *typedSrc = (float*)srcData2;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      mappedScalarVolume[idx++] = typedSrc[srcIdx];
                     }
-                    idx++;
+                  }
+                }
+              } else if (datatype2 == DB_DOUBLE) {
+                double *typedSrc = (double*)srcData2;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      mappedScalarVolume[idx++] = (float)typedSrc[srcIdx];
+                    }
+                  }
+                }
+              } else if (datatype2 == DB_INT) {
+                int *typedSrc = (int*)srcData2;
+                for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                  for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                    for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                      size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                      mappedScalarVolume[idx++] = (float)typedSrc[srcIdx];
+                    }
                   }
                 }
               }
@@ -1704,6 +1865,26 @@ size_t SiloContent::projectedSize()
       gradZ(vel1, duz, nx, ny, nz, z);
       gradZ(vel2, dvz, nx, ny, nz, z);
       gradZ(vel3, dwz, nx, ny, nz, z);
+    }
+    
+    // Specialized gradient computation for vorticity/helicity
+    // Only computes the 6 gradients needed: duy, duz, dvx, dvz, dwx, dwy
+    void computeVorticityGradients(
+      const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
+      int nx, int ny, int nz, float dx, float dy, const std::vector<float>& z,
+      std::vector<float>& duy, std::vector<float>& duz,
+      std::vector<float>& dvx, std::vector<float>& dvz,
+      std::vector<float>& dwx, std::vector<float>& dwy)
+    {
+      // Only compute what we need - skip dux, dvy, dwz
+      gradX(vel2, dvx, nx, ny, nz, dx);
+      gradX(vel3, dwx, nx, ny, nz, dx);
+      
+      gradY(vel1, duy, nx, ny, nz, dy);
+      gradY(vel3, dwy, nx, ny, nz, dy);
+      
+      gradZ(vel1, duz, nx, ny, nz, z);
+      gradZ(vel2, dvz, nx, ny, nz, z);
     }
     
     void computeLambda2(const std::vector<float>& dux, const std::vector<float>& duy, const std::vector<float>& duz,
