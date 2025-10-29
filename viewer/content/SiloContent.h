@@ -48,7 +48,11 @@ namespace hs {
                      /*! if not empty, map this scalar field to isosurface vertices */
                      const std::string &mappedScalarField = "",
                      /*! if true, skip adding isosurface to scene (for export-only mode) */
-                     bool noRender = false);
+                     bool noRender = false,
+                     /*! number of processors in each dimension for ghost cell trimming */
+                     vec3i numProcs = vec3i(1),
+                     /*! total number of processor blocks */
+                     int totalBlocks = 1);
     
     static void create(DataLoader *loader,
                        const ResourceSpecifier &dataURL);
@@ -71,6 +75,8 @@ namespace hs {
     const std::string   isoAgxPath;
     const std::string   mappedScalarField;
     const bool          noRender;
+    const vec3i         numProcs;     // number of processors in each dimension
+    const int           totalBlocks;  // total number of processor blocks
   };
   
 }

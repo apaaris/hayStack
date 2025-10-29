@@ -88,7 +88,9 @@ namespace hs {
                                      const std::string &isoExtractPath,
                                      const std::string &isoAgxPath,
                                      const std::string &mappedScalarField,
-                                     bool noRender)
+                                     bool noRender,
+                                     vec3i numProcs,
+                                     int totalBlocks)
     : fileName(fileName),
       thisPartID(thisPartID),
       cellRange(cellRange),
@@ -102,7 +104,9 @@ namespace hs {
       isoExtractPath(isoExtractPath),
       isoAgxPath(isoAgxPath),
       mappedScalarField(mappedScalarField),
-      noRender(noRender)
+      noRender(noRender),
+      numProcs(numProcs),
+      totalBlocks(totalBlocks)
   {}
 
   void siloSplitKDTree(std::vector<box3i> &regions,
@@ -139,6 +143,129 @@ namespace hs {
   bool siloContains(const ResourceSpecifier &hayStack,
                 const std::string &needle)
     { return siloContains(hayStack.where,needle); }
+  
+  // Parse processor ID from file path (e.g., "../p5/4320.silo" -> 5)
+  int siloParseProcessorID(const std::string &path) {
+    // Look for pattern "/p<number>/" or "/p<number>."
+    size_t pPos = path.rfind("/p");
+    if (pPos == std::string::npos) {
+      pPos = path.rfind("_p");  // Also try underscore variant
+    }
+    if (pPos == std::string::npos) {
+      return -1;  // No processor ID found
+    }
+    
+    size_t numStart = pPos + 2;  // Skip "/p" or "_p"
+    size_t numEnd = numStart;
+    while (numEnd < path.length() && std::isdigit(path[numEnd])) {
+      numEnd++;
+    }
+    
+    if (numEnd > numStart) {
+      return std::stoi(path.substr(numStart, numEnd - numStart));
+    }
+    return -1;
+  }
+  
+  // Determine processor grid topology from total number of blocks
+  // Tries to factor into a 3D grid as evenly as possible
+  vec3i siloEstimateProcessorGrid(int totalBlocks) {
+    if (totalBlocks <= 0) return vec3i(1, 1, 1);
+    
+    // Try common factorizations
+    // First check if it's a perfect cube
+    int cubeRoot = (int)std::round(std::cbrt(totalBlocks));
+    if (cubeRoot * cubeRoot * cubeRoot == totalBlocks) {
+      return vec3i(cubeRoot, cubeRoot, cubeRoot);
+    }
+    
+    // Try to factor into three dimensions
+    vec3i grid(1, 1, 1);
+    int remaining = totalBlocks;
+    
+    // Factor out powers of 2 first (common in HPC)
+    int dim = 0;
+    while (remaining > 1) {
+      if (remaining % 2 == 0) {
+        grid[dim % 3] *= 2;
+        remaining /= 2;
+        dim++;
+      } else {
+        break;
+      }
+    }
+    
+    // Try other small prime factors
+    for (int factor : {3, 5, 7}) {
+      while (remaining > 1 && remaining % factor == 0) {
+        grid[dim % 3] *= factor;
+        remaining /= factor;
+        dim++;
+      }
+    }
+    
+    // If there's a remainder, just assign it to the last dimension
+    if (remaining > 1) {
+      grid[2] *= remaining;
+    }
+    
+    return grid;
+  }
+  
+  // Convert linear processor ID to 3D coordinates
+  // Using column-major (Fortran) ordering: Z varies fastest, then Y, then X
+  vec3i siloGetProcessorCoords(int procID, const vec3i &numProcs) {
+    vec3i coords;
+    coords.x = procID / (numProcs.y * numProcs.z);
+    coords.y = (procID % (numProcs.y * numProcs.z)) / numProcs.z;
+    coords.z = procID % numProcs.z;
+    return coords;
+  }
+  
+  // Calculate ghost cell offsets based on processor position
+  // Returns (lower_offset, upper_offset) for each dimension
+  struct GhostCellOffsets {
+    vec3i lower;  // Ghost cells to skip at lower boundary
+    vec3i upper;  // Ghost cells to skip at upper boundary
+  };
+  
+  GhostCellOffsets siloCalculateGhostOffsets(int procID, const vec3i &numProcs, int ghostWidth = 2) {
+    GhostCellOffsets offsets;
+    offsets.lower = vec3i(0);
+    offsets.upper = vec3i(0);
+    
+    if (procID < 0 || ghostWidth <= 0 || (numProcs.x <= 1 && numProcs.y <= 1 && numProcs.z <= 1)) {
+      return offsets;  // No ghost cells for single processor, invalid ID, or disabled
+    }
+    
+    vec3i procCoords = siloGetProcessorCoords(procID, numProcs);
+    
+    // X dimension
+    if (procCoords.x > 0 && numProcs.x > 1) {
+      offsets.lower.x = ghostWidth;  // Skip ghost cells at lower boundary
+    }
+    if (procCoords.x < numProcs.x - 1 && numProcs.x > 1) {
+      offsets.upper.x = ghostWidth;  // Skip ghost cells at upper boundary
+    }
+    
+    // Y dimension
+    if (procCoords.y > 0 && numProcs.y > 1) {
+      offsets.lower.y = ghostWidth;
+    }
+    if (procCoords.y < numProcs.y - 1 && numProcs.y > 1) {
+      offsets.upper.y = ghostWidth;
+    }
+    
+    // Z dimension
+    if (procCoords.z > 0 && numProcs.z > 1) {
+      offsets.lower.z = ghostWidth;
+    }
+    if (procCoords.z < numProcs.z - 1 && numProcs.z > 1) {
+      offsets.upper.z = ghostWidth;
+    }
+    
+    return offsets;
+  }
   
   void SiloContent::create(DataLoader *loader,
                                 const ResourceSpecifier &dataURL)
@@ -220,6 +347,109 @@ namespace hs {
         std::cout << " Total: " << meshBlockNames.size() << " blocks" << std::endl;
       }
       
+      // Determine processor grid topology
+      vec3i numProcsGrid = vec3i(1, 1, 1);
+      int totalBlocks = meshBlockNames.size();
+      
+      // Check if ghost cell trimming is enabled
+      bool trimGhostCells = (dataURL.get("trim_ghosts", dataURL.get("trim_ghost_cells", "1")) != "0");
+      
+      if (trimGhostCells) {
+        // Try to get processor grid from URL parameters first
+        std::string procGridString = dataURL.get("proc_grid", "");
+        if (!procGridString.empty()) {
+          int nx, ny, nz;
+          if (sscanf(procGridString.c_str(), "%i,%i,%i", &nx, &ny, &nz) == 3) {
+            numProcsGrid = vec3i(nx, ny, nz);
+            if (loader->myRank() == 0) {
+              std::cout << "#hs.silo: using specified processor grid: " << numProcsGrid << std::endl;
+            }
+          }
+        } else {
+          // Try to infer processor grid from mesh origins
+          if (loader->myRank() == 0) {
+            std::cout << "#hs.silo: attempting to infer processor grid from mesh coordinates..." << std::endl;
+          }
+          
+          // Collect mesh origins from all blocks
+          std::vector<vec3f> blockOrigins;
+          for (int i = 0; i < meshBlockNames.size(); i++) {
+            std::string blockFile = dataURL.where;
+            std::string varName = "vel1";  // Use vel1 as a common variable
+            
+            // Parse block name to get file path
+            size_t colonPos = meshBlockNames[i].find(':');
+            if (colonPos != std::string::npos) {
+              std::string relativeBlockFile = meshBlockNames[i].substr(0, colonPos);
+              size_t lastSlash = dataURL.where.find_last_of("/\\");
+              if (lastSlash != std::string::npos) {
+                std::string masterDir = dataURL.where.substr(0, lastSlash + 1);
+                blockFile = masterDir + relativeBlockFile;
+              } else {
+                blockFile = relativeBlockFile;
+              }
+            }
+            
+            DBfile *dbf = DBOpen(blockFile.c_str(), DB_UNKNOWN, DB_READ);
+            if (dbf) {
+              DBquadvar *qv = DBGetQuadvar(dbf, varName.c_str());
+              if (qv && qv->meshname) {
+                DBquadmesh *qm = DBGetQuadmesh(dbf, qv->meshname);
+                if (qm && qm->coords && qm->coordtype == DB_COLLINEAR) {
+                  float *xCoords = (float*)qm->coords[0];
+                  float *yCoords = (float*)qm->coords[1];
+                  float *zCoords = qm->ndims > 2 ? (float*)qm->coords[2] : nullptr;
+                  blockOrigins.push_back(vec3f(xCoords[0], yCoords[0], zCoords ? zCoords[0] : 0.f));
+                }
+                if (qm) DBFreeQuadmesh(qm);
+              }
+              if (qv) DBFreeQuadvar(qv);
+              DBClose(dbf);
+            }
+          }
+          
+          // Analyze unique coordinates in each dimension to infer grid
+          if (blockOrigins.size() == totalBlocks) {
+            std::set<float> uniqueX, uniqueY, uniqueZ;
+            for (const auto& origin : blockOrigins) {
+              uniqueX.insert(origin.x);
+              uniqueY.insert(origin.y);
+              uniqueZ.insert(origin.z);
+            }
+            numProcsGrid = vec3i(uniqueX.size(), uniqueY.size(), uniqueZ.size());
+            
+            if (loader->myRank() == 0) {
+              std::cout << "#hs.silo: inferred processor grid from mesh coordinates: " << numProcsGrid << std::endl;
+              if (numProcsGrid.x * numProcsGrid.y * numProcsGrid.z != totalBlocks) {
+                std::cout << "#hs.silo: WARNING: inferred grid (" << numProcsGrid.x << "×" << numProcsGrid.y 
+                          << "×" << numProcsGrid.z << " = " << (numProcsGrid.x * numProcsGrid.y * numProcsGrid.z) 
+                          << ") doesn't match block count (" << totalBlocks << ")" << std::endl;
+                std::cout << "#hs.silo: Falling back to estimation..." << std::endl;
+                numProcsGrid = siloEstimateProcessorGrid(totalBlocks);
+              }
+            }
+          } else {
+            // Fall back to estimation
+            numProcsGrid = siloEstimateProcessorGrid(totalBlocks);
+            if (loader->myRank() == 0) {
+              std::cout << "#hs.silo: could not read all block origins, using estimated grid: " << numProcsGrid << std::endl;
+            }
+          }
+          
+          if (loader->myRank() == 0) {
+            std::cout << "#hs.silo: IMPORTANT: If artifacts appear, specify exact grid with proc_grid=nx,ny,nz" << std::endl;
+          }
+        }
+        
+        if (loader->myRank() == 0) {
+          std::cout << "#hs.silo: ghost cell trimming enabled (disable with trim_ghosts=0)" << std::endl;
+        }
+      } else {
+        if (loader->myRank() == 0) {
+          std::cout << "#hs.silo: ghost cell trimming disabled" << std::endl;
+        }
+      }
+      
       // Create content for each block
       std::string texelFormat = dataURL.get("format", dataURL.get("type", "float"));
       if (texelFormat == "f") texelFormat = "float";
@@ -244,7 +474,7 @@ namespace hs {
       
       for (int i = 0; i < meshBlockNames.size(); i++) {
         int rankID = i % numParts;
-        // Use block index 'i' as the processor ID for consistent numbering
+        
         loader->addContent(new SiloContent(dataURL.where, i,
                                            box3i(vec3i(0), vec3i(0)), // cellRange not used for multi-mesh
                                            vec3i(0), // fullVolumeDims determined per-block
@@ -257,7 +487,9 @@ namespace hs {
                                            isoExtractPath,
                                            isoAgxPath,
                                            mappedScalarField,
-                                           noRender));
+                                           noRender,
+                                           numProcsGrid,
+                                           totalBlocks));
       }
       return; // Done with multi-mesh handling
     }
@@ -411,7 +643,9 @@ namespace hs {
                                               isoExtractPath,
                                               isoAgxPath,
                                               mappedScalarField,
-                                              noRender));
+                                              noRender,
+                                              vec3i(1, 1, 1),  // numProcs (single file)
+                                              1));  // totalBlocks (single file)
     }
   }
   
@@ -559,11 +793,136 @@ size_t SiloContent::projectedSize()
     
     // For multi-mesh, we load the entire block; for single mesh, we use cellRange
     box3i loadRange;
+    GhostCellOffsets ghostOffsets;
+    
     if (isMultiMesh) {
       loadRange = box3i(vec3i(0), blockDims - 1);
+      
+      // Only trim ghost cells if we have a multi-processor grid
+      bool shouldTrimGhosts = (numProcs.x > 1 || numProcs.y > 1 || numProcs.z > 1);
+      
+      if (shouldTrimGhosts) {
+        const int ghostWidth = 2;  // As per the Fortran code
+        
+        // Parse the actual processor ID from the filename (e.g., "p75" from "../p75/4320.silo:vel1")
+        // This is the MPI rank that wrote this file and determines spatial position
+        int procID = siloParseProcessorID(meshBlockName);
+        
+        if (procID < 0) {
+          // If parsing fails, fall back to thisPartID (block index)
+          // This assumes blocks are in spatial order, which may not be true
+          procID = thisPartID;
+          if (verbose) {
+            std::cout << "  WARNING: Could not parse processor ID from filename, using block index" << std::endl;
+          }
+        }
+        
+        // Map processor ID to 3D coordinates in the processor grid
+        // Using column-major (Fortran) ordering: Z varies fastest, then Y, then X
+        // procID = x * (ny * nz) + y * nz + z
+        vec3i procCoords = vec3i(0);
+        ghostOffsets.lower = vec3i(0);
+        ghostOffsets.upper = vec3i(0);
+        
+        // Calculate coordinates from processor ID (Z-fastest ordering)
+        procCoords.x = procID / (numProcs.y * numProcs.z);
+        procCoords.y = (procID % (numProcs.y * numProcs.z)) / numProcs.z;
+        procCoords.z = procID % numProcs.z;
+        
+        // For X dimension
+        // Trim ghost cells: all (2) on lower, but only (ghostWidth-1) on upper
+        // This leaves 1 overlapping layer that connects adjacent blocks
+        if (numProcs.x > 1) {
+          // Ghost cells at LOWER boundary: trim all if not at domain boundary
+          if (procCoords.x > 0) {
+            ghostOffsets.lower.x = ghostWidth;  // Trim 2
+          }
+          // Ghost cells at UPPER boundary: trim (ghostWidth-1) to leave 1 overlapping
+          if (procCoords.x < numProcs.x - 1) {
+            ghostOffsets.upper.x = ghostWidth - 1;  // Trim 1, keep 1
+          }
+        }
+        
+        // For Y dimension
+        if (numProcs.y > 1) {
+          if (procCoords.y > 0) {
+            ghostOffsets.lower.y = ghostWidth;  // Trim 2
+          }
+          if (procCoords.y < numProcs.y - 1) {
+            ghostOffsets.upper.y = ghostWidth - 1;  // Trim 1, keep 1
+          }
+        }
+        
+        // For Z dimension
+        if (numProcs.z > 1) {
+          if (procCoords.z > 0) {
+            ghostOffsets.lower.z = ghostWidth;  // Trim 2
+          }
+          if (procCoords.z < numProcs.z - 1) {
+            ghostOffsets.upper.z = ghostWidth - 1;  // Trim 1, keep 1
+          }
+        }
+        
+        // Adjust load range to skip ghost cells
+        loadRange.lower += ghostOffsets.lower;
+        loadRange.upper -= ghostOffsets.upper;
+        
+        // Update numVoxels to reflect the trimmed data
+        numVoxels = loadRange.size() + 1;
+        
+        // Update mesh origin to account for skipped ghost cells
+        meshOrigin += vec3f(ghostOffsets.lower) * meshSpacing;
+        
+        if (verbose || true) {  // Always print for debugging
+          std::cout << "\n  ===== Block " << thisPartID << " (Proc " << procID << ") Ghost Cell Trimming =====" << std::endl;
+          std::cout << "  File: " << meshBlockName << std::endl;
+          std::cout << "  Processor coords: " << procCoords << " in grid " << numProcs << std::endl;
+          
+          // Show boundary status
+          std::cout << "  Boundary status:" << std::endl;
+          std::cout << "    X: " << (procCoords.x == 0 ? "DOMAIN_LOWER" : "interior") 
+                    << " | " << (procCoords.x == numProcs.x - 1 ? "DOMAIN_UPPER" : "interior") << std::endl;
+          std::cout << "    Y: " << (procCoords.y == 0 ? "DOMAIN_LOWER" : "interior") 
+                    << " | " << (procCoords.y == numProcs.y - 1 ? "DOMAIN_UPPER" : "interior") << std::endl;
+          std::cout << "    Z: " << (procCoords.z == 0 ? "DOMAIN_LOWER" : "interior") 
+                    << " | " << (procCoords.z == numProcs.z - 1 ? "DOMAIN_UPPER" : "interior") << std::endl;
+          
+          std::cout << "  Original block: " << blockDims << " cells" << std::endl;
+          vec3f origOrigin = meshOrigin - vec3f(ghostOffsets.lower) * meshSpacing;
+          std::cout << "  Original origin: " << origOrigin << std::endl;
+          std::cout << "  Ghost cells to trim: lower=" << ghostOffsets.lower << ", upper=" << ghostOffsets.upper << std::endl;
+          std::cout << "  Load range [" << loadRange.lower << " to " << loadRange.upper << "]" << std::endl;
+          std::cout << "  Trimmed block: " << numVoxels << " vertices (" << (numVoxels - 1) << " cells)" << std::endl;
+          std::cout << "  Trimmed origin: " << meshOrigin << std::endl;
+          vec3f upperBound = meshOrigin + vec3f(numVoxels - 1) * meshSpacing;
+          std::cout << "  Spatial bounds: [" << meshOrigin << "] to [" << upperBound << "]" << std::endl;
+          
+          // Show where this block SHOULD connect with neighbors
+          std::cout << "  Block connections:" << std::endl;
+          std::cout << "    This block X range: [" << meshOrigin.x << " to " 
+                    << (meshOrigin.x + (numVoxels.x - 1) * meshSpacing.x) << "]" << std::endl;
+          if (procCoords.x > 0) {
+            std::cout << "    → Should connect with lower-X neighbor at X=" << meshOrigin.x << std::endl;
+          }
+          if (procCoords.x < numProcs.x - 1) {
+            vec3f upperX = meshOrigin.x + (numVoxels.x - 1) * meshSpacing.x;
+            std::cout << "    → Should connect with upper-X neighbor at X=" << upperX << std::endl;
+          }
+          
+          std::cout << "  Spacing: " << meshSpacing << std::endl;
+          std::cout << "  ============================================\n" << std::endl;
+        }
+      } else {
+        // Single processor or trimming disabled
+        numVoxels = blockDims;
+        ghostOffsets.lower = vec3i(0);
+        ghostOffsets.upper = vec3i(0);
+      }
     } else {
       loadRange = cellRange;
       numVoxels = cellRange.size() + 1;
+      ghostOffsets.lower = vec3i(0);
+      ghostOffsets.upper = vec3i(0);
     }
     
     size_t numScalars = size_t(numVoxels.x) * size_t(numVoxels.y) * size_t(numVoxels.z);
