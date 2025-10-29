@@ -21,6 +21,8 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <limits>
+#include <mutex>
 #include <umesh/UMesh.h>
 #include <umesh/extractIsoSurface.h>
 #include <miniScene/Scene.h>
@@ -283,7 +285,6 @@ namespace hs {
     
     if (isMultiMesh) {
       // Multi-mesh file: get list of blocks
-      std::cout << "#hs.silo: detected multi-mesh file with " << toc->nmultivar << " multi-variables" << std::endl;
       
       // Check if this is a derived variable
       bool isDerivedVar = (variableName == "lambda2" || variableName == "qCriterion" || 
@@ -293,7 +294,6 @@ namespace hs {
       const char *multivarName;
       if (isDerivedVar) {
         // For derived variables, use vel1 to get the mesh structure
-        std::cout << "#hs.silo: '" << variableName << "' is a derived variable, using vel1 for mesh structure" << std::endl;
         multivarName = "vel1";
       } else {
         multivarName = variableName.empty() ? toc->multivar_names[0] : variableName.c_str();
@@ -305,7 +305,10 @@ namespace hs {
         throw std::runtime_error("hs::SiloContent: could not read multi-variable '"+std::string(multivarName)+"'");
       }
       
-      std::cout << "#hs.silo: multi-variable '" << multivarName << "' has " << mv->nvars << " blocks" << std::endl;
+      if (loader->myRank() == 0) {
+        std::cout << "Silo: " << (isDerivedVar ? variableName : std::string(multivarName)) 
+                  << " (" << mv->nvars << " blocks)" << std::endl;
+      }
       
       for (int i = 0; i < mv->nvars; i++) {
         if (mv->varnames[i]) {
@@ -319,32 +322,7 @@ namespace hs {
       // Distribute blocks across ranks
       int numParts = dataURL.numParts;
       if (meshBlockNames.size() < numParts) {
-        std::cout << "#hs.silo: WARNING: requested " << numParts << " ranks but only " 
-                  << meshBlockNames.size() << " blocks available. Using " << meshBlockNames.size() << " ranks." << std::endl;
         numParts = meshBlockNames.size();
-      }
-      
-      if (loader->myRank() == 0) {
-        std::cout << "Silo Multi-Mesh: " << meshBlockNames.size() << " blocks will be distributed across " 
-                  << numParts << " ranks:" << std::endl;
-      }
-      
-      // Distribute blocks round-robin across ranks
-      std::vector<int> blocksPerRank(numParts, 0);
-      for (int i = 0; i < meshBlockNames.size(); i++) {
-        int rankID = i % numParts;
-        blocksPerRank[rankID]++;
-        if (loader->myRank() == 0) {
-          std::cout << " Block #" << i << " (" << meshBlockNames[i] << ") -> rank " << rankID << std::endl;
-        }
-      }
-      
-      if (loader->myRank() == 0) {
-        std::cout << "\nBlock distribution summary:" << std::endl;
-        for (int r = 0; r < numParts; r++) {
-          std::cout << " Rank " << r << ": " << blocksPerRank[r] << " blocks" << std::endl;
-        }
-        std::cout << " Total: " << meshBlockNames.size() << " blocks" << std::endl;
       }
       
       // Determine processor grid topology
@@ -361,15 +339,9 @@ namespace hs {
           int nx, ny, nz;
           if (sscanf(procGridString.c_str(), "%i,%i,%i", &nx, &ny, &nz) == 3) {
             numProcsGrid = vec3i(nx, ny, nz);
-            if (loader->myRank() == 0) {
-              std::cout << "#hs.silo: using specified processor grid: " << numProcsGrid << std::endl;
-            }
           }
         } else {
           // Try to infer processor grid from mesh origins
-          if (loader->myRank() == 0) {
-            std::cout << "#hs.silo: attempting to infer processor grid from mesh coordinates..." << std::endl;
-          }
           
           // Collect mesh origins from all blocks
           std::vector<vec3f> blockOrigins;
@@ -418,35 +390,13 @@ namespace hs {
             }
             numProcsGrid = vec3i(uniqueX.size(), uniqueY.size(), uniqueZ.size());
             
-            if (loader->myRank() == 0) {
-              std::cout << "#hs.silo: inferred processor grid from mesh coordinates: " << numProcsGrid << std::endl;
-              if (numProcsGrid.x * numProcsGrid.y * numProcsGrid.z != totalBlocks) {
-                std::cout << "#hs.silo: WARNING: inferred grid (" << numProcsGrid.x << "×" << numProcsGrid.y 
-                          << "×" << numProcsGrid.z << " = " << (numProcsGrid.x * numProcsGrid.y * numProcsGrid.z) 
-                          << ") doesn't match block count (" << totalBlocks << ")" << std::endl;
-                std::cout << "#hs.silo: Falling back to estimation..." << std::endl;
-                numProcsGrid = siloEstimateProcessorGrid(totalBlocks);
-              }
+            if (numProcsGrid.x * numProcsGrid.y * numProcsGrid.z != totalBlocks) {
+              numProcsGrid = siloEstimateProcessorGrid(totalBlocks);
             }
           } else {
             // Fall back to estimation
             numProcsGrid = siloEstimateProcessorGrid(totalBlocks);
-            if (loader->myRank() == 0) {
-              std::cout << "#hs.silo: could not read all block origins, using estimated grid: " << numProcsGrid << std::endl;
-            }
           }
-          
-          if (loader->myRank() == 0) {
-            std::cout << "#hs.silo: IMPORTANT: If artifacts appear, specify exact grid with proc_grid=nx,ny,nz" << std::endl;
-          }
-        }
-        
-        if (loader->myRank() == 0) {
-          std::cout << "#hs.silo: ghost cell trimming enabled (disable with trim_ghosts=0)" << std::endl;
-        }
-      } else {
-        if (loader->myRank() == 0) {
-          std::cout << "#hs.silo: ghost cell trimming disabled" << std::endl;
         }
       }
       
@@ -467,9 +417,6 @@ namespace hs {
       // Signal that we should exit after loading if no_render is set
       if (noRender) {
         loader->shouldExitAfterLoading = true;
-        if (loader->myRank() == 0) {
-          std::cout << "#hs.silo: no_render flag is set - will exit after isosurface export completes" << std::endl;
-        }
       }
       
       for (int i = 0; i < meshBlockNames.size(); i++) {
@@ -501,7 +448,6 @@ namespace hs {
     std::string type = dataURL.get("type",dataURL.get("format",""));
     std::string texelFormat;
     if (type == "") {
-      std::cout << "#hs.silo: no type specified, trying to guess form '" << dataURL.where << "'..." << std::endl;
       if (siloContains(dataURL,"uint8"))
         texelFormat = "uint8_t";
       else if (siloContains(dataURL,"uint16"))
@@ -533,7 +479,6 @@ namespace hs {
     if (dimsString == "") {
 #ifdef HS_HAVE_SILO
       // Try to read dimensions directly from Silo file
-      std::cout << "#hs.silo: no dims specified, reading from Silo file" << std::endl;
       DBfile *dbfile = DBOpen(dataURL.where.c_str(), DB_UNKNOWN, DB_READ);
       if (!dbfile)
         throw std::runtime_error("hs::SiloContent: could not open Silo file to read dimensions");
@@ -554,26 +499,19 @@ namespace hs {
       dims.y = qvar->dims[1];
       dims.z = qvar->ndims > 2 ? qvar->dims[2] : 1;
       
-      std::cout << "#hs.silo: read dimensions from file: " << dims << std::endl;
-      
       DBFreeQuadvar(qvar);
       DBClose(dbfile);
 #else
       // Fall back to parsing from filename
-      std::cout << "#hs.silo: no dims specified and Silo not available, trying to guess from filename" << std::endl;
       const char *fileName = dataURL.where.c_str();
       const char *nextScanPos = fileName;
-      PRINT(fileName);
       while (true) {
         const char *nextUS = strstr(nextScanPos,"_");
-        PRINT(nextUS);
         if (!nextUS)
           throw std::runtime_error
             ("could not find '_<width>x<height>x<depth>_' in Silo file name");
         int n = sscanf(nextUS,"_%ix%ix%i_",&dims.x,&dims.y,&dims.z);
         if (n != 3) { nextScanPos = nextUS+1; continue; }
-
-        std::cout << "guessing dims from " << (nextUS+1) << std::endl;;
         break;
       }
 #endif
@@ -606,9 +544,7 @@ namespace hs {
       throw std::runtime_error("input data too small to split into indicated number of parts");
 
     if (loader->myRank() == 0) {
-      std::cout << "Silo Volume: input data file of " << dims << " voxels will be read in the following bricks:" << std::endl;
-      for (int i=0;i<regions.size();i++)
-        std::cout << " #" << i << " : " << regions[i] << std::endl;
+      std::cout << "Silo: " << dims << " voxels, " << regions.size() << " partitions" << std::endl;
     }
     float isoValue = NAN;
     std::string isoString = dataURL.get("iso",dataURL.get("isoValue"));
@@ -623,9 +559,6 @@ namespace hs {
     // Signal that we should exit after loading if no_render is set
     if (noRender) {
       loader->shouldExitAfterLoading = true;
-      if (loader->myRank() == 0) {
-        std::cout << "#hs.silo: no_render flag is set - will exit after isosurface export completes" << std::endl;
-      }
     }
     
     if (variableName.empty())
@@ -645,7 +578,7 @@ namespace hs {
                                               mappedScalarField,
                                               noRender,
                                               vec3i(1, 1, 1),  // numProcs (single file)
-                                              1));  // totalBlocks (single file)
+                                              dataURL.numParts));  // totalBlocks = number of partitions
     }
   }
   
@@ -731,15 +664,9 @@ size_t SiloContent::projectedSize()
                        requestedVar == "vorticity" || requestedVar == "helicity" ||
                        requestedVar == "vel_mag");
         varname = isDerivedVar ? "vel1" : variableName.c_str();
-        if (verbose) {
-          std::cout << "Loading Silo variable (specified): " << requestedVar << std::endl;
-        }
       } else {
         varname = toc->qvar_names[0];
         requestedVar = varname;
-        if (verbose) {
-          std::cout << "Loading Silo variable (first in file): " << varname << std::endl;
-        }
       }
     }
     
@@ -781,11 +708,6 @@ size_t SiloContent::projectedSize()
           if (zCoords && qmesh->dims[2] > 1) {
             meshSpacing.z = zCoords[1] - zCoords[0];
           }
-          
-          if (verbose) {
-            std::cout << "  Mesh origin: " << meshOrigin << std::endl;
-            std::cout << "  Mesh spacing: " << meshSpacing << std::endl;
-          }
         }
         DBFreeQuadmesh(qmesh);
       }
@@ -812,9 +734,6 @@ size_t SiloContent::projectedSize()
           // If parsing fails, fall back to thisPartID (block index)
           // This assumes blocks are in spatial order, which may not be true
           procID = thisPartID;
-          if (verbose) {
-            std::cout << "  WARNING: Could not parse processor ID from filename, using block index" << std::endl;
-          }
         }
         
         // Map processor ID to 3D coordinates in the processor grid
@@ -872,46 +791,6 @@ size_t SiloContent::projectedSize()
         
         // Update mesh origin to account for skipped ghost cells
         meshOrigin += vec3f(ghostOffsets.lower) * meshSpacing;
-        
-        if (verbose || true) {  // Always print for debugging
-          std::cout << "\n  ===== Block " << thisPartID << " (Proc " << procID << ") Ghost Cell Trimming =====" << std::endl;
-          std::cout << "  File: " << meshBlockName << std::endl;
-          std::cout << "  Processor coords: " << procCoords << " in grid " << numProcs << std::endl;
-          
-          // Show boundary status
-          std::cout << "  Boundary status:" << std::endl;
-          std::cout << "    X: " << (procCoords.x == 0 ? "DOMAIN_LOWER" : "interior") 
-                    << " | " << (procCoords.x == numProcs.x - 1 ? "DOMAIN_UPPER" : "interior") << std::endl;
-          std::cout << "    Y: " << (procCoords.y == 0 ? "DOMAIN_LOWER" : "interior") 
-                    << " | " << (procCoords.y == numProcs.y - 1 ? "DOMAIN_UPPER" : "interior") << std::endl;
-          std::cout << "    Z: " << (procCoords.z == 0 ? "DOMAIN_LOWER" : "interior") 
-                    << " | " << (procCoords.z == numProcs.z - 1 ? "DOMAIN_UPPER" : "interior") << std::endl;
-          
-          std::cout << "  Original block: " << blockDims << " cells" << std::endl;
-          vec3f origOrigin = meshOrigin - vec3f(ghostOffsets.lower) * meshSpacing;
-          std::cout << "  Original origin: " << origOrigin << std::endl;
-          std::cout << "  Ghost cells to trim: lower=" << ghostOffsets.lower << ", upper=" << ghostOffsets.upper << std::endl;
-          std::cout << "  Load range [" << loadRange.lower << " to " << loadRange.upper << "]" << std::endl;
-          std::cout << "  Trimmed block: " << numVoxels << " vertices (" << (numVoxels - 1) << " cells)" << std::endl;
-          std::cout << "  Trimmed origin: " << meshOrigin << std::endl;
-          vec3f upperBound = meshOrigin + vec3f(numVoxels - 1) * meshSpacing;
-          std::cout << "  Spatial bounds: [" << meshOrigin << "] to [" << upperBound << "]" << std::endl;
-          
-          // Show where this block SHOULD connect with neighbors
-          std::cout << "  Block connections:" << std::endl;
-          std::cout << "    This block X range: [" << meshOrigin.x << " to " 
-                    << (meshOrigin.x + (numVoxels.x - 1) * meshSpacing.x) << "]" << std::endl;
-          if (procCoords.x > 0) {
-            std::cout << "    → Should connect with lower-X neighbor at X=" << meshOrigin.x << std::endl;
-          }
-          if (procCoords.x < numProcs.x - 1) {
-            vec3f upperX = meshOrigin.x + (numVoxels.x - 1) * meshSpacing.x;
-            std::cout << "    → Should connect with upper-X neighbor at X=" << upperX << std::endl;
-          }
-          
-          std::cout << "  Spacing: " << meshSpacing << std::endl;
-          std::cout << "  ============================================\n" << std::endl;
-        }
       } else {
         // Single processor or trimming disabled
         numVoxels = blockDims;
@@ -1116,28 +995,65 @@ size_t SiloContent::projectedSize()
       // Convert back to rawData format (derived variables are always float)
       rawData.resize(numScalars * sizeof(float));
       memcpy(rawData.data(), derivedData.data(), numScalars * sizeof(float));
-      
-      std::cout << "#hs.silo: computed " << requestedVar << std::endl;
     }
     
     DBClose(dbfile);
     
-    // Validate the data for debugging
+    // Compute local min/max for this block and accumulate in static variables
     float *floatData = (float*)rawData.data();
     size_t numValues = rawData.size() / sizeof(float);
-    float minVal = floatData[0], maxVal = floatData[0];
+    float localMinVal = std::numeric_limits<float>::max();
+    float localMaxVal = -std::numeric_limits<float>::max();
     int nanCount = 0, infCount = 0;
+    
     for (size_t i = 0; i < numValues; i++) {
-    if (std::isnan(floatData[i])) nanCount++;
-    if (std::isinf(floatData[i])) infCount++;
-    if (std::isfinite(floatData[i])) {
-        minVal = std::min(minVal, floatData[i]);
-        maxVal = std::max(maxVal, floatData[i]);
+      if (std::isnan(floatData[i])) nanCount++;
+      if (std::isinf(floatData[i])) infCount++;
+      if (std::isfinite(floatData[i])) {
+        localMinVal = std::min(localMinVal, floatData[i]);
+        localMaxVal = std::max(localMaxVal, floatData[i]);
+      }
     }
+    
+    // Use static variables to accumulate global min/max across all blocks
+    static std::mutex statsMutex;
+    static float globalMinVal = std::numeric_limits<float>::max();
+    static float globalMaxVal = -std::numeric_limits<float>::max();
+    static int globalNaNs = 0;
+    static int globalInfs = 0;
+    static std::string globalVarName;
+    static int blocksLoaded = 0;
+    
+    {
+      std::lock_guard<std::mutex> lock(statsMutex);
+      globalMinVal = std::min(globalMinVal, localMinVal);
+      globalMaxVal = std::max(globalMaxVal, localMaxVal);
+      globalNaNs += nanCount;
+      globalInfs += infCount;
+      if (globalVarName.empty()) globalVarName = requestedVar;
+      blocksLoaded++;
+      
+      // Print statistics once when all blocks for this variable are loaded
+      // For multi-mesh: totalBlocks, for single-mesh: use partition count from dataURL
+      if (blocksLoaded == totalBlocks) {
+        std::cout << "\n=== TRANSFER FUNCTION DATA ===" << std::endl;
+        std::cout << "Variable: " << globalVarName << std::endl;
+        std::cout << "Min: " << globalMinVal << std::endl;
+        std::cout << "Max: " << globalMaxVal << std::endl;
+        if (globalNaNs > 0 || globalInfs > 0) {
+          std::cout << "NaNs: " << globalNaNs << ", Infs: " << globalInfs << std::endl;
+        }
+        std::cout << "==============================\n" << std::endl;
+        
+        // Reset for next dataset
+        globalMinVal = std::numeric_limits<float>::max();
+        globalMaxVal = -std::numeric_limits<float>::max();
+        globalNaNs = 0;
+        globalInfs = 0;
+        globalVarName.clear();
+        blocksLoaded = 0;
+      }
     }
-    std::cout << "  Data validation: " << numValues << " values, range=[" 
-            << minVal << ":" << maxVal << "], NaNs=" << nanCount 
-            << ", Infs=" << infCount << std::endl;
     
     std::vector<uint8_t> rawDataRGB; // Empty for now - multi-channel not implemented for Silo yet
 #endif
@@ -1214,8 +1130,6 @@ size_t SiloContent::projectedSize()
         
         if (isMappedDerivedVar) {
           // Compute derived field for mapped scalar
-          std::cout << "#hs.silo: computing derived mapped scalar field '" << mappedScalarField << "' from velocity components" << std::endl;
-          
           // Reopen the file to load velocity components
           DBfile *dbfile2 = DBOpen(fileToOpen.c_str(), DB_UNKNOWN, DB_READ);
           if (dbfile2) {
@@ -1319,7 +1233,6 @@ size_t SiloContent::projectedSize()
             }
             
             haveMappedScalars = true;
-            std::cout << "#hs.silo: computed mapped scalar field '" << mappedScalarField << "'" << std::endl;
             DBClose(dbfile2);
           }
         } else {
@@ -1328,7 +1241,6 @@ size_t SiloContent::projectedSize()
           if (dbfile2) {
             DBquadvar *qvar2 = DBGetQuadvar(dbfile2, mappedScalarField.c_str());
             if (qvar2) {
-              std::cout << "#hs.silo: loading mapped scalar field '" << mappedScalarField << "'" << std::endl;
               void *srcData2 = qvar2->vals[0];
               int datatype2 = qvar2->datatype;
               
@@ -1353,8 +1265,9 @@ size_t SiloContent::projectedSize()
               haveMappedScalars = true;
               DBFreeQuadvar(qvar2);
             } else {
-              std::cout << "#hs.silo: WARNING - could not load mapped scalar field '" 
-                        << mappedScalarField << "'" << std::endl;
+              if (verbose) {
+                std::cout << "WARNING: Could not load mapped scalar field '" << mappedScalarField << "'" << std::endl;
+              }
             }
             DBClose(dbfile2);
           }
@@ -1488,8 +1401,6 @@ size_t SiloContent::projectedSize()
             }
           } else {
             // Fallback to isoValue
-            std::cout << "#hs.silo: WARNING - mapped scalar field '" << mappedScalarField 
-                      << "' could not be loaded, using isoValue" << std::endl;
             for (int i = 0; i < surf->vertices.size(); i++)
               mappedScalars.push_back(isoValue);
           }
@@ -1499,11 +1410,8 @@ size_t SiloContent::projectedSize()
             mappedScalars.push_back(isoValue);
         }
         
-        std::cout << "#hs.silo: writing isosurface in raw numpy arrays format to " 
-                  << outputFilePrefix << "{.vertex_coords.f3,.vertex_scalars.f1,.triangle_indices.i3}" << std::endl;
-        if (!mappedScalarField.empty()) {
-          std::cout << "#hs.silo: mapping scalar field: " << mappedScalarField << std::endl;
-        }
+        std::cout << "Exporting isosurface: " << outputFilePrefix 
+                  << "{.vertex_coords.f3,.vertex_scalars.f1,.triangle_indices.i3}" << std::endl;
         
         // Write the three binary files
         std::ofstream vertices(outputFilePrefix + ".vertex_coords.f3", std::ios::binary);
@@ -1532,7 +1440,7 @@ size_t SiloContent::projectedSize()
           scalars.close();
           indices.close();
           
-          std::cout << "#hs.silo: saved " << surf->triangles.size() << " triangles and " 
+          std::cout << "  " << surf->triangles.size() << " triangles, " 
                     << surf->vertices.size() << " vertices" << std::endl;
         }
       }
@@ -1589,7 +1497,7 @@ size_t SiloContent::projectedSize()
         // Construct filename: iso_field_timestep.processor.agx
         outputFilePath += "iso_" + fieldName + "_" + timestep + "." + processorId + ".agx";
         
-        std::cout << "#hs.silo: writing isosurface in AGX format to " << outputFilePath << std::endl;
+        std::cout << "Exporting AGX: " << outputFilePath << std::endl;
         
         // Create AGX exporter
         AGXExporter exporter = agxNewExporter();
@@ -1681,8 +1589,6 @@ size_t SiloContent::projectedSize()
               scalars.push_back(interpolated);
             }
           } else {
-            std::cout << "#hs.silo: WARNING - mapped scalar field '" << mappedScalarField 
-                      << "' could not be loaded, using isoValue" << std::endl;
             for (size_t i = 0; i < surf->vertices.size(); i++)
               scalars.push_back(isoValue);
           }
@@ -1690,17 +1596,15 @@ size_t SiloContent::projectedSize()
           // Add scalar field as per-timestep attribute
           agxSetTimeStepParameterArray1D(exporter, 0, "vertex.attribute", ANARI_FLOAT32,
                                          scalars.data(), scalars.size());
-          
-          std::cout << "#hs.silo: mapped scalar field: " << mappedScalarField << std::endl;
         }
         
         // Write AGX file
         int rc = agxWrite(exporter, outputFilePath.c_str());
         if (rc == 0) {
-          std::cout << "#hs.silo: saved " << surf->triangles.size() << " triangles and " 
-                    << surf->vertices.size() << " vertices to AGX file" << std::endl;
+          std::cout << "  " << surf->triangles.size() << " triangles, " 
+                    << surf->vertices.size() << " vertices" << std::endl;
         } else {
-          std::cerr << "#hs.silo: ERROR - failed to write AGX file (error code " << rc << ")" << std::endl;
+          std::cerr << "ERROR: Failed to write AGX file (error code " << rc << ")" << std::endl;
         }
         
         // Release exporter
@@ -1720,8 +1624,6 @@ size_t SiloContent::projectedSize()
         
         if (!mesh->indices.empty())
           dataGroup.minis.push_back(model);
-      } else {
-        std::cout << "#hs.silo: skipping render (no_render flag is set)" << std::endl;
       }
     } else {
       dataGroup.structuredVolumes.push_back
