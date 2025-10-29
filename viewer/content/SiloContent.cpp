@@ -23,6 +23,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <set>
 #include <umesh/UMesh.h>
 #include <umesh/extractIsoSurface.h>
 #include <miniScene/Scene.h>
@@ -999,7 +1000,8 @@ size_t SiloContent::projectedSize()
     
     DBClose(dbfile);
     
-    // Compute local min/max for this block and accumulate in static variables
+    // Store statistics in the DataRank for later aggregation
+    // This allows statistics to be collected across blocks and then across MPI ranks
     float *floatData = (float*)rawData.data();
     size_t numValues = rawData.size() / sizeof(float);
     float localMinVal = std::numeric_limits<float>::max();
@@ -1015,45 +1017,17 @@ size_t SiloContent::projectedSize()
       }
     }
     
-    // Use static variables to accumulate global min/max across all blocks
-    static std::mutex statsMutex;
-    static float globalMinVal = std::numeric_limits<float>::max();
-    static float globalMaxVal = -std::numeric_limits<float>::max();
-    static int globalNaNs = 0;
-    static int globalInfs = 0;
-    static std::string globalVarName;
-    static int blocksLoaded = 0;
-    
-    {
-      std::lock_guard<std::mutex> lock(statsMutex);
-      globalMinVal = std::min(globalMinVal, localMinVal);
-      globalMaxVal = std::max(globalMaxVal, localMaxVal);
-      globalNaNs += nanCount;
-      globalInfs += infCount;
-      if (globalVarName.empty()) globalVarName = requestedVar;
-      blocksLoaded++;
-      
-      // Print statistics once when all blocks for this variable are loaded
-      // For multi-mesh: totalBlocks, for single-mesh: use partition count from dataURL
-      if (blocksLoaded == totalBlocks) {
-        std::cout << "\n=== TRANSFER FUNCTION DATA ===" << std::endl;
-        std::cout << "Variable: " << globalVarName << std::endl;
-        std::cout << "Min: " << globalMinVal << std::endl;
-        std::cout << "Max: " << globalMaxVal << std::endl;
-        if (globalNaNs > 0 || globalInfs > 0) {
-          std::cout << "NaNs: " << globalNaNs << ", Infs: " << globalInfs << std::endl;
-        }
-        std::cout << "==============================\n" << std::endl;
-        
-        // Reset for next dataset
-        globalMinVal = std::numeric_limits<float>::max();
-        globalMaxVal = -std::numeric_limits<float>::max();
-        globalNaNs = 0;
-        globalInfs = 0;
-        globalVarName.clear();
-        blocksLoaded = 0;
-      }
+    // Store in dataGroup's metadata for aggregation across blocks and ranks
+    if (!dataGroup.siloStats) {
+      dataGroup.siloStats = std::make_shared<std::map<std::string, SiloStats>>();
     }
+    
+    auto &stats = (*static_cast<std::map<std::string, SiloStats>*>(dataGroup.siloStats.get()))[requestedVar];
+    stats.minVal = std::min(stats.minVal, localMinVal);
+    stats.maxVal = std::max(stats.maxVal, localMaxVal);
+    stats.nanCount += nanCount;
+    stats.infCount += infCount;
+    stats.numBlocks++;
     
     std::vector<uint8_t> rawDataRGB; // Empty for now - multi-channel not implemented for Silo yet
 #endif

@@ -208,6 +208,54 @@ namespace hs {
     return size;
   }
 
+  void printSiloStatistics(LocalModel &localModel, hs::mpi::Comm &workers)
+  {
+    // Aggregate statistics across all data groups on this rank
+    std::map<std::string, hs::SiloStats> localStats;
+    
+    for (auto &dg : localModel.dataGroups) {
+      if (dg.siloStats) {
+        auto *stats = static_cast<std::map<std::string, hs::SiloStats>*>(dg.siloStats.get());
+        for (auto &pair : *stats) {
+          auto &varName = pair.first;
+          auto &dgStats = pair.second;
+          auto &aggStats = localStats[varName];
+          aggStats.minVal = std::min(aggStats.minVal, dgStats.minVal);
+          aggStats.maxVal = std::max(aggStats.maxVal, dgStats.maxVal);
+          aggStats.nanCount += dgStats.nanCount;
+          aggStats.infCount += dgStats.infCount;
+          aggStats.numBlocks += dgStats.numBlocks;
+        }
+      }
+    }
+    
+    // Now aggregate across all MPI ranks
+    for (auto &pair : localStats) {
+      auto &varName = pair.first;
+      auto &localVarStats = pair.second;
+      
+      // Use MPI to get global min/max
+      float globalMin = workers.allReduceMin(localVarStats.minVal);
+      float globalMax = workers.allReduceMax(localVarStats.maxVal);
+      int globalNaNs = workers.allReduceAdd(localVarStats.nanCount);
+      int globalInfs = workers.allReduceAdd(localVarStats.infCount);
+      int globalBlocks = workers.allReduceAdd(localVarStats.numBlocks);
+      
+      // Print on rank 0
+      if (workers.rank == 0) {
+        std::cout << "\n=== TRANSFER FUNCTION DATA ===" << std::endl;
+        std::cout << "Variable: " << varName << std::endl;
+        std::cout << "Min: " << globalMin << std::endl;
+        std::cout << "Max: " << globalMax << std::endl;
+        std::cout << "Blocks: " << globalBlocks << std::endl;
+        if (globalNaNs > 0 || globalInfs > 0) {
+          std::cout << "NaNs: " << globalNaNs << ", Infs: " << globalInfs << std::endl;
+        }
+        std::cout << "==============================\n" << std::endl;
+      }
+    }
+  }
+
   /*! actually loads one rank's data, based on which content got
     assigned to which rank. must get called on every worker
     collaboratively - but only on active workers */
@@ -275,6 +323,9 @@ namespace hs {
         lights->dirLights = sharedLights.directional;
         localModel.dataGroups[i].minis.push_back(lights);
       }
+
+    // Aggregate and print Silo statistics if any exist
+    printSiloStatistics(localModel, workers);
 
     if (verbose) {
       workers.barrier();

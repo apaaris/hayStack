@@ -18,8 +18,20 @@
 
 #include "viewer/DataLoader.h"
 #include "hayStack/StructuredVolume.h"
+#include <map>
+#include <memory>
+#include <limits>
 
 namespace hs {
+  
+  // Statistics for Silo data to enable global min/max computation
+  struct SiloStats {
+    float minVal = std::numeric_limits<float>::max();
+    float maxVal = -std::numeric_limits<float>::max();
+    int nanCount = 0;
+    int infCount = 0;
+    int numBlocks = 0;
+  };
   
   /*! a file of 'raw' spheres */
   struct SiloContent : public LoadableContent {

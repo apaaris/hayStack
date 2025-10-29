@@ -61,6 +61,9 @@ namespace hs {
     std::vector<StructuredVolume::SP> structuredVolumes;
     std::vector<TAMRVolume::SP>       amr;
     int                               dataGroupID = -1;
+    
+    // Statistics for Silo data (forward declaration to avoid circular dependency)
+    std::shared_ptr<void>             siloStats;
   };
 
 } // ::hs
