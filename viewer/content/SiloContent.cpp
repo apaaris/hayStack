@@ -1751,15 +1751,16 @@ size_t SiloContent::projectedSize()
   // Vorticity and derived field computations
   namespace vorticity {
     
-    // Compute gradient in X direction (periodic boundaries)
+    // Compute gradient in X direction (one-sided differences at boundaries for multi-block grids)
     void gradX(const std::vector<float>& u, std::vector<float>& uGrad, int nx, int ny, int nz, float dx) {
       for (int z = 0; z < nz; ++z) {
         size_t off = z * nx * ny;
         for (int row = 0; row < ny; ++row) {
-          // Periodic boundaries
-          uGrad[off + row*nx] = 0.5f * (u[off + row*nx + 1] - u[off + row*nx + nx - 1]) / (2.0f*dx);
-          uGrad[off + row*nx + nx - 1] = 0.5f * (u[off + row*nx] - u[off + row*nx + nx - 2]) / (2.0f*dx);
-          // Interior points
+          // One-sided forward difference at lower boundary
+          uGrad[off + row*nx] = (u[off + row*nx + 1] - u[off + row*nx]) / dx;
+          // One-sided backward difference at upper boundary
+          uGrad[off + row*nx + nx - 1] = (u[off + row*nx + nx - 1] - u[off + row*nx + nx - 2]) / dx;
+          // Interior points (central difference)
           for (int col = 1; col < nx - 1; ++col) {
             uGrad[off + row*nx + col] = 0.5f * (u[off + row*nx + col + 1] - u[off + row*nx + col - 1]) / (2.0f*dx);
           }
@@ -1767,15 +1768,16 @@ size_t SiloContent::projectedSize()
       }
     }
     
-    // Compute gradient in Y direction (periodic boundaries)
+    // Compute gradient in Y direction (one-sided differences at boundaries for multi-block grids)
     void gradY(const std::vector<float>& v, std::vector<float>& vGrad, int nx, int ny, int nz, float dy) {
       for (int z = 0; z < nz; ++z) {
         size_t off = z * nx * ny;
         for (int col = 0; col < nx; ++col) {
-          // Periodic boundaries
-          vGrad[0*nx + col + off] = 0.5f * (v[1*nx + col + off] - v[(ny-1)*nx + col + off]) / (2.0f*dy);
-          vGrad[(ny-1)*nx + col + off] = 0.5f * (v[0*nx + col + off] - v[(ny-2)*nx + col + off]) / (2.0f*dy);
-          // Interior points
+          // One-sided forward difference at lower boundary
+          vGrad[0*nx + col + off] = (v[1*nx + col + off] - v[0*nx + col + off]) / dy;
+          // One-sided backward difference at upper boundary
+          vGrad[(ny-1)*nx + col + off] = (v[(ny-1)*nx + col + off] - v[(ny-2)*nx + col + off]) / dy;
+          // Interior points (central difference)
           for (int row = 1; row < ny - 1; ++row) {
             vGrad[row*nx + col + off] = 0.5f * (v[(row+1)*nx + col + off] - v[(row-1)*nx + col + off]) / (2.0f*dy);
           }
