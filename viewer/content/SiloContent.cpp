@@ -343,17 +343,24 @@ namespace hs {
           }
         } else {
           // Try to infer processor grid from mesh origins
+          // For large datasets, only sample a subset to avoid slowdown
+          const int MAX_BLOCKS_TO_SAMPLE = 200;
+          bool shouldSample = (meshBlockNames.size() > MAX_BLOCKS_TO_SAMPLE);
+          int blocksToCheck = shouldSample ? MAX_BLOCKS_TO_SAMPLE : meshBlockNames.size();
           
-          // Collect mesh origins from all blocks
+          // Collect mesh origins from sampled blocks
           std::vector<vec3f> blockOrigins;
-          for (int i = 0; i < meshBlockNames.size(); i++) {
+          for (int i = 0; i < blocksToCheck; i++) {
+            // For large datasets, sample uniformly across the range
+            int blockIdx = shouldSample ? (i * meshBlockNames.size()) / blocksToCheck : i;
+            
             std::string blockFile = dataURL.where;
             std::string varName = "vel1";  // Use vel1 as a common variable
             
             // Parse block name to get file path
-            size_t colonPos = meshBlockNames[i].find(':');
+            size_t colonPos = meshBlockNames[blockIdx].find(':');
             if (colonPos != std::string::npos) {
-              std::string relativeBlockFile = meshBlockNames[i].substr(0, colonPos);
+              std::string relativeBlockFile = meshBlockNames[blockIdx].substr(0, colonPos);
               size_t lastSlash = dataURL.where.find_last_of("/\\");
               if (lastSlash != std::string::npos) {
                 std::string masterDir = dataURL.where.substr(0, lastSlash + 1);
@@ -382,7 +389,7 @@ namespace hs {
           }
           
           // Analyze unique coordinates in each dimension to infer grid
-          if (blockOrigins.size() == totalBlocks) {
+          if (blockOrigins.size() >= blocksToCheck * 0.9) { // Allow some failures
             std::set<float> uniqueX, uniqueY, uniqueZ;
             for (const auto& origin : blockOrigins) {
               uniqueX.insert(origin.x);
@@ -391,7 +398,9 @@ namespace hs {
             }
             numProcsGrid = vec3i(uniqueX.size(), uniqueY.size(), uniqueZ.size());
             
+            // Verify the inferred grid makes sense
             if (numProcsGrid.x * numProcsGrid.y * numProcsGrid.z != totalBlocks) {
+              // If sampling, try to extrapolate or fall back to estimation
               numProcsGrid = siloEstimateProcessorGrid(totalBlocks);
             }
           } else {
