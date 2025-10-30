@@ -1755,7 +1755,7 @@ size_t SiloContent::projectedSize()
           }
           
           // Add scalar field as per-timestep attribute
-          agxSetTimeStepParameterArray1D(exporter, 0, "vertex.attribute", ANARI_FLOAT32,
+          agxSetTimeStepParameterArray1D(exporter, 0, "vertex.attribute0", ANARI_FLOAT32,
                                          scalars.data(), scalars.size());
         }
         
