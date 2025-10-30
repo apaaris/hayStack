@@ -351,16 +351,20 @@ namespace hs {
           }
         } else {
           // Try to infer processor grid from mesh origins
-          // For large datasets, only sample a subset to avoid slowdown
-          const int MAX_BLOCKS_TO_SAMPLE = 200;
-          bool shouldSample = (meshBlockNames.size() > MAX_BLOCKS_TO_SAMPLE);
-          int blocksToCheck = shouldSample ? MAX_BLOCKS_TO_SAMPLE : meshBlockNames.size();
+          // Use adaptive sampling: start small, stop early if we find the pattern
+          const int MIN_BLOCKS_TO_SAMPLE = 3;
+          const int MAX_BLOCKS_TO_SAMPLE = 10;
+          int initialSample = std::min((int)meshBlockNames.size(), MIN_BLOCKS_TO_SAMPLE);
           
-          // Collect mesh origins from sampled blocks
-          std::vector<vec3f> blockOrigins;
-          for (int i = 0; i < blocksToCheck; i++) {
-            // For large datasets, sample uniformly across the range
-            int blockIdx = shouldSample ? (i * meshBlockNames.size()) / blocksToCheck : i;
+          std::set<float> uniqueX, uniqueY, uniqueZ;
+          int samplesRead = 0;
+          int consecutiveFailures = 0;
+          const int MAX_CONSECUTIVE_FAILURES = 5;
+          
+          // Sample blocks, stopping early if we find a valid grid or hit too many failures
+          for (int i = 0; i < MAX_BLOCKS_TO_SAMPLE && samplesRead < meshBlockNames.size(); i++) {
+            // Sample uniformly across the range for better coverage
+            int blockIdx = (i * meshBlockNames.size()) / MAX_BLOCKS_TO_SAMPLE;
             
             std::string blockFile = dataURL.where;
             std::string varName = "vel1";  // Use vel1 as a common variable
@@ -387,32 +391,45 @@ namespace hs {
                   float *xCoords = (float*)qm->coords[0];
                   float *yCoords = (float*)qm->coords[1];
                   float *zCoords = qm->ndims > 2 ? (float*)qm->coords[2] : nullptr;
-                  blockOrigins.push_back(vec3f(xCoords[0], yCoords[0], zCoords ? zCoords[0] : 0.f));
+                  uniqueX.insert(xCoords[0]);
+                  uniqueY.insert(yCoords[0]);
+                  uniqueZ.insert(zCoords ? zCoords[0] : 0.f);
+                  samplesRead++;
+                  consecutiveFailures = 0;
+                  
+                  // Early termination: if we've found enough blocks and the grid matches
+                  if (samplesRead >= initialSample) {
+                    int inferredTotal = uniqueX.size() * uniqueY.size() * uniqueZ.size();
+                    if (inferredTotal == totalBlocks) {
+                      // Found valid grid! Stop sampling
+                      break;
+                    }
+                  }
                 }
                 if (qm) DBFreeQuadmesh(qm);
               }
               if (qv) DBFreeQuadvar(qv);
               DBClose(dbf);
+            } else {
+              consecutiveFailures++;
+              if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                // Too many file read failures, fall back to estimation
+                break;
+              }
             }
           }
           
-          // Analyze unique coordinates in each dimension to infer grid
-          if (blockOrigins.size() >= blocksToCheck * 0.9) { // Allow some failures
-            std::set<float> uniqueX, uniqueY, uniqueZ;
-            for (const auto& origin : blockOrigins) {
-              uniqueX.insert(origin.x);
-              uniqueY.insert(origin.y);
-              uniqueZ.insert(origin.z);
-            }
+          // Analyze collected coordinates
+          if (samplesRead >= std::min(initialSample, (int)meshBlockNames.size())) {
             numProcsGrid = vec3i(uniqueX.size(), uniqueY.size(), uniqueZ.size());
             
             // Verify the inferred grid makes sense
             if (numProcsGrid.x * numProcsGrid.y * numProcsGrid.z != totalBlocks) {
-              // If sampling, try to extrapolate or fall back to estimation
+              // Fall back to estimation
               numProcsGrid = siloEstimateProcessorGrid(totalBlocks);
             }
           } else {
-            // Fall back to estimation
+            // Not enough samples, fall back to estimation
             numProcsGrid = siloEstimateProcessorGrid(totalBlocks);
           }
         }
