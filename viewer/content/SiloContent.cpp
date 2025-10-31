@@ -667,8 +667,11 @@ size_t SiloContent::projectedSize()
     
     // Open the appropriate Silo file
     DBfile *dbfile = DBOpen(fileToOpen.c_str(), DB_UNKNOWN, DB_READ);
-    if (!dbfile)
-      throw std::runtime_error("hs::SiloContent: could not open Silo file '"+fileToOpen+"'");
+    if (!dbfile) {
+      std::cerr << "ERROR: Could not open Silo file '" << fileToOpen << "'" << std::endl;
+      std::cerr << "       Skipping block " << thisPartID << " and continuing..." << std::endl;
+      return;  // Skip this block, continue with others
+    }
     
     // Determine which variable to load
     const char *varname = nullptr;
@@ -689,8 +692,10 @@ size_t SiloContent::projectedSize()
       // Single mesh: use variableName or first quad variable
       DBtoc *toc = DBGetToc(dbfile);
       if (!toc || toc->nqvar == 0) {
+        std::cerr << "ERROR: No quad variables found in file '" << fileName << "'" << std::endl;
+        std::cerr << "       Skipping block " << thisPartID << " and continuing..." << std::endl;
         DBClose(dbfile);
-        throw std::runtime_error("hs::SiloContent: no quad variables found in file '"+fileName+"'");
+        return;  // Skip this block, continue with others
       }
       
       if (!variableName.empty()) {
@@ -708,8 +713,10 @@ size_t SiloContent::projectedSize()
     // Read the quad variable
     DBquadvar *qvar = DBGetQuadvar(dbfile, varname);
     if (!qvar) {
+      std::cerr << "ERROR: Could not read variable '" << varname << "' from " << fileToOpen << std::endl;
+      std::cerr << "       Skipping block " << thisPartID << " and continuing..." << std::endl;
       DBClose(dbfile);
-      throw std::runtime_error("hs::SiloContent: could not read variable '"+std::string(varname)+"'");
+      return;  // Skip this block, continue with others
     }
     
     // Get dimensions from the variable (important for multi-mesh where each block has different dims)
@@ -858,15 +865,12 @@ size_t SiloContent::projectedSize()
     
     // For single mesh, verify dimensions match
     if (!isMultiMesh && blockDims != fullVolumeDims) {
+      std::cerr << "ERROR: Dimension mismatch in block " << thisPartID << std::endl;
+      std::cerr << "       Expected " << fullVolumeDims << " but got " << blockDims << std::endl;
+      std::cerr << "       Skipping block and continuing..." << std::endl;
       DBFreeQuadvar(qvar);
       DBClose(dbfile);
-      throw std::runtime_error("hs::SiloContent: dimension mismatch - expected " 
-                               + std::to_string(fullVolumeDims.x) + "x" 
-                               + std::to_string(fullVolumeDims.y) + "x" 
-                               + std::to_string(fullVolumeDims.z) 
-                               + " but got " + std::to_string(blockDims.x) + "x" 
-                               + std::to_string(blockDims.y) + "x" 
-                               + std::to_string(blockDims.z));
+      return;  // Skip this block, continue with others
     }
     
     // Convert and copy data to our buffer based on data type
@@ -889,9 +893,11 @@ size_t SiloContent::projectedSize()
             } else if (datatype == DB_INT) {
               value = (float)((int*)srcData)[srcIdx];
             } else {
+              std::cerr << "ERROR: Unsupported data type (" << datatype << ") in block " << thisPartID << std::endl;
+              std::cerr << "       Skipping block and continuing..." << std::endl;
               DBFreeQuadvar(qvar);
               DBClose(dbfile);
-              throw std::runtime_error("hs::SiloContent: unsupported data type in Silo file");
+              return;  // Skip this block, continue with others
             }
             ((float*)dataPtr)[0] = value;
             dataPtr += sizeof(float);
@@ -904,9 +910,11 @@ size_t SiloContent::projectedSize()
             } else if (datatype == DB_INT) {
               value = (uint8_t)((int*)srcData)[srcIdx];
             } else {
+              std::cerr << "ERROR: Unsupported data type (" << datatype << ") in block " << thisPartID << std::endl;
+              std::cerr << "       Skipping block and continuing..." << std::endl;
               DBFreeQuadvar(qvar);
               DBClose(dbfile);
-              throw std::runtime_error("hs::SiloContent: unsupported data type in Silo file");
+              return;  // Skip this block, continue with others
             }
             ((uint8_t*)dataPtr)[0] = value;
             dataPtr += sizeof(uint8_t);
@@ -919,9 +927,11 @@ size_t SiloContent::projectedSize()
             } else if (datatype == DB_INT) {
               value = (uint16_t)((int*)srcData)[srcIdx];
             } else {
+              std::cerr << "ERROR: Unsupported data type (" << datatype << ") in block " << thisPartID << std::endl;
+              std::cerr << "       Skipping block and continuing..." << std::endl;
               DBFreeQuadvar(qvar);
               DBClose(dbfile);
-              throw std::runtime_error("hs::SiloContent: unsupported data type in Silo file");
+              return;  // Skip this block, continue with others
             }
             ((uint16_t*)dataPtr)[0] = value;
             dataPtr += sizeof(uint16_t);
