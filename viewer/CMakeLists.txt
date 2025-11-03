@@ -90,6 +90,25 @@ else()
   set(SILO_FOUND FALSE)
 endif()
 
+# Find NanoVDB (header-only, part of OpenVDB 8.0+)
+find_path(NANOVDB_INCLUDE_DIR 
+  NAMES nanovdb/NanoVDB.h nanovdb/util/GridBuilder.h
+  PATHS 
+    /usr/include 
+    /usr/local/include
+    /opt/openvdb/include
+    $ENV{NANOVDB_ROOT}/include
+)
+
+if(NANOVDB_INCLUDE_DIR)
+  message(STATUS "Found NanoVDB: ${NANOVDB_INCLUDE_DIR}")
+  set(NANOVDB_FOUND TRUE)
+else()
+  message(WARNING "NanoVDB not found. NanoVDB export will not be available.")
+  message(WARNING "  Install OpenVDB 8.0+ or set NANOVDB_ROOT environment variable")
+  set(NANOVDB_FOUND FALSE)
+endif()
+
 if (HS_VIEWER AND (TARGET barney))
   # ------------------------------------------------------------------
   add_executable(hsViewer
@@ -117,6 +136,10 @@ if (HS_VIEWER AND (TARGET barney))
     target_link_libraries(hsViewer PRIVATE ${SILO_LIBRARY})
     target_compile_definitions(hsViewer PRIVATE -DHS_HAVE_SILO=1)
   endif()
+  if(NANOVDB_FOUND)
+    target_include_directories(hsViewer PRIVATE ${NANOVDB_INCLUDE_DIR})
+    target_compile_definitions(hsViewer PRIVATE -DHS_HAVE_NANOVDB=1)
+  endif()
 endif()
 
 # ------------------------------------------------------------------
@@ -132,6 +155,10 @@ if(SILO_FOUND)
   target_include_directories(hsOffline PRIVATE ${SILO_INCLUDE_DIR})
   target_link_libraries(hsOffline PRIVATE ${SILO_LIBRARY})
   target_compile_definitions(hsOffline PRIVATE -DHS_HAVE_SILO=1)
+endif()
+if(NANOVDB_FOUND)
+  target_include_directories(hsOffline PRIVATE ${NANOVDB_INCLUDE_DIR})
+  target_compile_definitions(hsOffline PRIVATE -DHS_HAVE_NANOVDB=1)
 endif()
 
 # ------------------------------------------------------------------
@@ -155,6 +182,10 @@ if (HS_CUTEE)
     target_include_directories(hsViewerQT PRIVATE ${SILO_INCLUDE_DIR})
     target_link_libraries(hsViewerQT PRIVATE ${SILO_LIBRARY})
     target_compile_definitions(hsViewerQT PRIVATE -DHS_HAVE_SILO=1)
+  endif()
+  if(NANOVDB_FOUND)
+    target_include_directories(hsViewerQT PRIVATE ${NANOVDB_INCLUDE_DIR})
+    target_compile_definitions(hsViewerQT PRIVATE -DHS_HAVE_NANOVDB=1)
   endif()
   set_target_properties(hsViewerQT
     PROPERTIES

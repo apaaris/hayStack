@@ -64,7 +64,11 @@ namespace hs {
                      /*! number of processors in each dimension for ghost cell trimming */
                      vec3i numProcs = vec3i(1),
                      /*! total number of processor blocks */
-                     int totalBlocks = 1);
+                     int totalBlocks = 1,
+                     /*! if not empty, export NanoVDB grid to this path */
+                     const std::string &nvdbExportPath = "",
+                     /*! threshold value for NanoVDB export (only voxels > threshold) */
+                     float nvdbThreshold = 0.0f);
     
     static void create(DataLoader *loader,
                        const ResourceSpecifier &dataURL);
@@ -89,6 +93,8 @@ namespace hs {
     const bool          noRender;
     const vec3i         numProcs;     // number of processors in each dimension
     const int           totalBlocks;  // total number of processor blocks
+    const std::string   nvdbExportPath;  // path for NanoVDB export
+    const float         nvdbThreshold;   // threshold for NanoVDB export
   };
   
 }

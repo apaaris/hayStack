@@ -22,3 +22,19 @@ target_link_libraries(miniSetMaterial miniScene)
 
 add_executable(swcMakeBinaries swcMakeBinaries.cpp)
 target_link_libraries(swcMakeBinaries miniScene)
+
+# NanoVDB merge tool
+find_path(NANOVDB_INCLUDE_DIR 
+  NAMES nanovdb/NanoVDB.h nanovdb/util/GridBuilder.h
+  PATHS /usr/include /usr/local/include /opt/openvdb/include
+)
+
+if(NANOVDB_INCLUDE_DIR)
+  add_executable(mergeNanoVDB mergeNanoVDB.cpp)
+  target_include_directories(mergeNanoVDB PRIVATE ${NANOVDB_INCLUDE_DIR})
+  target_compile_definitions(mergeNanoVDB PRIVATE -DHS_HAVE_NANOVDB=1)
+  target_compile_features(mergeNanoVDB PRIVATE cxx_std_17)
+  message(STATUS "Building mergeNanoVDB with NanoVDB at: ${NANOVDB_INCLUDE_DIR}")
+else()
+  message(STATUS "Skipping mergeNanoVDB (NanoVDB not found)")
+endif()

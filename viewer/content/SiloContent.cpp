@@ -32,6 +32,11 @@
 #define AGX_WRITE_IMPL
 #include "agx/agx_write.h"
 
+#ifdef HS_HAVE_NANOVDB
+#include <nanovdb/NanoVDB.h>
+#include <nanovdb/util/GridBuilder.h>
+#include <nanovdb/util/IO.h>
+#endif
 
 #ifdef HS_HAVE_SILO
 #include <silo.h>
@@ -56,7 +61,9 @@ namespace hs {
                                      const std::string &mappedScalarField,
                                      bool noRender,
                                      vec3i numProcs,
-                                     int totalBlocks)
+                                     int totalBlocks,
+                                     const std::string &nvdbExportPath,
+                                     float nvdbThreshold)
     : fileName(fileName),
       thisPartID(thisPartID),
       cellRange(cellRange),
@@ -72,7 +79,9 @@ namespace hs {
       mappedScalarField(mappedScalarField),
       noRender(noRender),
       numProcs(numProcs),
-      totalBlocks(totalBlocks)
+      totalBlocks(totalBlocks),
+      nvdbExportPath(nvdbExportPath),
+      nvdbThreshold(nvdbThreshold)
   {}
 
   void siloSplitKDTree(std::vector<box3i> &regions,
@@ -401,6 +410,14 @@ namespace hs {
       std::string isoExtractPath = dataURL.get("iso_extract", "");
       std::string isoAgxPath = dataURL.get("iso_agx", "");
       std::string mappedScalarField = dataURL.get("mapped_scalar", dataURL.get("ms", ""));
+      std::string nvdbExportPath = dataURL.get("nvdb_export", dataURL.get("nvdb", ""));
+      float nvdbThreshold = 0.0f;
+      try {
+        std::string threshStr = dataURL.get("nvdb_threshold", dataURL.get("nvdb_t", "0.0"));
+        nvdbThreshold = std::stof(threshStr);
+      } catch (...) {
+        nvdbThreshold = 0.0f;
+      }
       bool noRender = (dataURL.get("no_render", dataURL.get("norender", "")) == "1" || 
                        dataURL.get("no_render", dataURL.get("norender", "")) == "true");
       
@@ -426,7 +443,9 @@ namespace hs {
                                            mappedScalarField,
                                            noRender,
                                            numProcsGrid,
-                                           totalBlocks));
+                                           totalBlocks,
+                                           nvdbExportPath,
+                                           nvdbThreshold));
       }
       return; // Done with multi-mesh handling
     }
@@ -543,6 +562,14 @@ namespace hs {
     std::string isoExtractPath = dataURL.get("iso_extract", "");
     std::string isoAgxPath = dataURL.get("iso_agx", "");
     std::string mappedScalarField = dataURL.get("mapped_scalar", dataURL.get("ms", ""));
+    std::string nvdbExportPath = dataURL.get("nvdb_export", dataURL.get("nvdb", ""));
+    float nvdbThreshold = 0.0f;
+    try {
+      std::string threshStr = dataURL.get("nvdb_threshold", dataURL.get("nvdb_t", "0.0"));
+      nvdbThreshold = std::stof(threshStr);
+    } catch (...) {
+      nvdbThreshold = 0.0f;
+    }
     bool noRender = (dataURL.get("no_render", dataURL.get("norender", "")) == "1" || 
                      dataURL.get("no_render", dataURL.get("norender", "")) == "true");
     
@@ -568,7 +595,9 @@ namespace hs {
                                               mappedScalarField,
                                               noRender,
                                               vec3i(1, 1, 1),  // numProcs (single file)
-                                              dataURL.numParts));  // totalBlocks = number of partitions
+                                              dataURL.numParts,  // totalBlocks = number of partitions
+                                              nvdbExportPath,
+                                              nvdbThreshold));
     }
   }
   
@@ -1783,6 +1812,134 @@ size_t SiloContent::projectedSize()
           dataGroup.minis.push_back(model);
       }
     } else {
+      // Export NanoVDB grid BEFORE passing data to StructuredVolume (which may move it)
+#ifdef HS_HAVE_NANOVDB
+      if (!nvdbExportPath.empty() && !rawData.empty() && texelFormat == "float") {
+      if (verbose) {
+        std::cout << "Exporting NanoVDB grid (threshold=" << nvdbThreshold << ")..." << std::endl;
+      }
+      
+      const float* floatData = reinterpret_cast<const float*>(rawData.data());
+      
+      // Create NanoVDB grid builder
+      nanovdb::GridBuilder<float> builder(0.0f);  // background value = 0
+      auto accessor = builder.getAccessor();
+      
+      // Compute global voxel offset from world origin and spacing
+      // This ensures each block writes to unique global voxel coordinates
+      vec3i globalVoxelOffset;
+      globalVoxelOffset.x = static_cast<int>(std::round(gridOrigin.x / gridSpacing.x));
+      globalVoxelOffset.y = static_cast<int>(std::round(gridOrigin.y / gridSpacing.y));
+      globalVoxelOffset.z = static_cast<int>(std::round(gridOrigin.z / gridSpacing.z));
+      
+      // Add active voxels above threshold
+      size_t activeCount = 0;
+      for (int iz = 0; iz < numVoxels.z; iz++) {
+        for (int iy = 0; iy < numVoxels.y; iy++) {
+          for (int ix = 0; ix < numVoxels.x; ix++) {
+            size_t idx = ix + iy * numVoxels.x + iz * numVoxels.x * numVoxels.y;
+            float value = floatData[idx];
+            
+            if (value > nvdbThreshold) {
+              // Use GLOBAL voxel coordinates for proper merging
+              nanovdb::Coord ijk(ix + globalVoxelOffset.x, 
+                                  iy + globalVoxelOffset.y, 
+                                  iz + globalVoxelOffset.z);
+              accessor.setValue(ijk, value);
+              activeCount++;
+            }
+          }
+        }
+      }
+      
+      if (activeCount > 0) {
+        // Build the grid (voxel size, origin, name)
+        auto handle = builder.getHandle<>(
+          static_cast<double>(gridSpacing.x),  // voxel size
+          nanovdb::Vec3d(gridOrigin.x, gridOrigin.y, gridOrigin.z),  // world origin
+          "density");  // grid name
+        
+        // Construct output filename with zero-padding
+        std::string outputPath = nvdbExportPath;
+        if (outputPath.back() != '/' && outputPath.back() != '\\') {
+          outputPath += "/";
+        }
+        
+        // Parse processor and timestep IDs for filename
+        std::string processorId = "0000";
+        std::string timestep = "000000";
+        
+        if (isMultiMesh && !meshBlockName.empty()) {
+          size_t pPos = meshBlockName.find("/p");
+          if (pPos != std::string::npos) {
+            size_t numStart = pPos + 2;
+            size_t numEnd = meshBlockName.find('/', numStart);
+            if (numEnd == std::string::npos) numEnd = meshBlockName.find(".silo", numStart);
+            if (numEnd != std::string::npos) {
+              std::ostringstream oss;
+              oss << std::setfill('0') << std::setw(4) << std::stoi(meshBlockName.substr(numStart, numEnd - numStart));
+              processorId = oss.str();
+            }
+          }
+          // Parse timestep from filename
+          size_t siloPos = meshBlockName.find(".silo");
+          if (siloPos != std::string::npos) {
+            size_t numEnd = siloPos;
+            size_t numStart = siloPos;
+            while (numStart > 0 && std::isdigit(meshBlockName[numStart - 1])) {
+              numStart--;
+            }
+            if (numStart < numEnd) {
+              std::ostringstream oss;
+              oss << std::setfill('0') << std::setw(6) << std::stoi(meshBlockName.substr(numStart, numEnd - numStart));
+              timestep = oss.str();
+            }
+          }
+        } else {
+          std::ostringstream oss;
+          oss << std::setfill('0') << std::setw(4) << thisPartID;
+          processorId = oss.str();
+        }
+        
+        std::string fieldName = variableName.empty() ? "data" : variableName;
+        outputPath += "nvdb_" + fieldName + "_" + timestep + "." + processorId + ".nvdb";
+        
+        // Write to file
+        nanovdb::io::writeGrid(outputPath, handle);
+        
+        // Write metadata file for merging script
+        std::string metaPath = outputPath + ".json";
+        std::ofstream metaFile(metaPath);
+        if (metaFile.is_open()) {
+          metaFile << "{\n";
+          metaFile << "  \"processor\": " << processorId << ",\n";
+          metaFile << "  \"timestep\": " << timestep << ",\n";
+          metaFile << "  \"fieldName\": \"" << fieldName << "\",\n";
+          metaFile << "  \"gridOrigin\": [" << gridOrigin.x << ", " << gridOrigin.y << ", " << gridOrigin.z << "],\n";
+          metaFile << "  \"gridSpacing\": [" << gridSpacing.x << ", " << gridSpacing.y << ", " << gridSpacing.z << "],\n";
+          metaFile << "  \"globalVoxelOffset\": [" << globalVoxelOffset.x << ", " << globalVoxelOffset.y << ", " << globalVoxelOffset.z << "],\n";
+          metaFile << "  \"numVoxels\": [" << numVoxels.x << ", " << numVoxels.y << ", " << numVoxels.z << "],\n";
+          metaFile << "  \"activeVoxels\": " << activeCount << ",\n";
+          metaFile << "  \"threshold\": " << nvdbThreshold << "\n";
+          metaFile << "}\n";
+          metaFile.close();
+        }
+        
+        std::cout << "  Exported NanoVDB: " << outputPath << std::endl;
+        std::cout << "  Active voxels: " << activeCount << " / " << (numVoxels.x * numVoxels.y * numVoxels.z)
+                  << " (" << (100.0 * activeCount / (numVoxels.x * numVoxels.y * numVoxels.z)) << "%)" << std::endl;
+      } else {
+        std::cout << "  WARNING: No voxels above threshold " << nvdbThreshold << ", skipping export" << std::endl;
+      }
+      }
+#else
+      if (!nvdbExportPath.empty()) {
+        std::cerr << "WARNING: NanoVDB export requested but NanoVDB support not compiled in" << std::endl;
+        std::cerr << "         Install OpenVDB 8.0+ and reconfigure CMake" << std::endl;
+      }
+#endif
+      
+      // Now create the StructuredVolume (after NanoVDB export, since it may move the data)
       dataGroup.structuredVolumes.push_back
         (std::make_shared<StructuredVolume>(numVoxels,texelFormat,rawData,rawDataRGB,
                                             gridOrigin,gridSpacing));

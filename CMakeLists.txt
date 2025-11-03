@@ -76,6 +76,26 @@ if (HS_CUTEE)
   add_subdirectory(submodules/cuteeOWL     EXCLUDE_FROM_ALL)
 endif()
 
+# ------------------------------------------------------------------
+# NanoVDB detection (for NanoVDB export and merge tools)
+# ------------------------------------------------------------------
+find_path(NANOVDB_INCLUDE_DIR 
+  NAMES nanovdb/NanoVDB.h nanovdb/util/GridBuilder.h
+  PATHS 
+    /usr/include 
+    /usr/local/include
+    /opt/openvdb/include
+    $ENV{NANOVDB_ROOT}/include
+)
+
+if(NANOVDB_INCLUDE_DIR)
+  message(STATUS "Found NanoVDB: ${NANOVDB_INCLUDE_DIR}")
+  set(NANOVDB_FOUND TRUE CACHE BOOL "NanoVDB found")
+else()
+  message(STATUS "NanoVDB not found. NanoVDB features will not be available.")
+  set(NANOVDB_FOUND FALSE CACHE BOOL "NanoVDB not found")
+endif()
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
