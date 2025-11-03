@@ -24,52 +24,14 @@
 #include <limits>
 #include <mutex>
 #include <set>
+#include <sstream>
+#include <iomanip>
 #include <umesh/UMesh.h>
 #include <umesh/extractIsoSurface.h>
 #include <miniScene/Scene.h>
 #define AGX_WRITE_IMPL
 #include "agx/agx_write.h"
 
-// Forward declarations for derived velocity field computations
-namespace hs {
-  namespace vorticity {
-    void computeVelocityGradients(
-      const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
-      int nx, int ny, int nz, float dx, float dy, const std::vector<float>& z,
-      std::vector<float>& dux, std::vector<float>& duy, std::vector<float>& duz,
-      std::vector<float>& dvx, std::vector<float>& dvy, std::vector<float>& dvz,
-      std::vector<float>& dwx, std::vector<float>& dwy, std::vector<float>& dwz);
-    
-    void computeLambda2(const std::vector<float>& dux, const std::vector<float>& duy, const std::vector<float>& duz,
-                        const std::vector<float>& dvx, const std::vector<float>& dvy, const std::vector<float>& dvz,
-                        const std::vector<float>& dwx, const std::vector<float>& dwy, const std::vector<float>& dwz,
-                        std::vector<float>& result);
-    
-    void computeQCriterion(const std::vector<float>& dux, const std::vector<float>& duy, const std::vector<float>& duz,
-                           const std::vector<float>& dvx, const std::vector<float>& dvy, const std::vector<float>& dvz,
-                           const std::vector<float>& dwx, const std::vector<float>& dwy, const std::vector<float>& dwz,
-                           std::vector<float>& result);
-    
-    void computeVorticity(const std::vector<float>& duy, const std::vector<float>& duz,
-                          const std::vector<float>& dvx, const std::vector<float>& dvz,
-                          const std::vector<float>& dwx, const std::vector<float>& dwy,
-                          std::vector<float>& result);
-    
-    void computeHelicity(const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
-                         const std::vector<float>& duy, const std::vector<float>& duz,
-                         const std::vector<float>& dvx, const std::vector<float>& dvz,
-                         const std::vector<float>& dwx, const std::vector<float>& dwy,
-                         std::vector<float>& result);
-    
-    // Specialized gradient computation for vorticity/helicity that only computes needed gradients
-    void computeVorticityGradients(
-      const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
-      int nx, int ny, int nz, float dx, float dy, const std::vector<float>& z,
-      std::vector<float>& duy, std::vector<float>& duz,
-      std::vector<float>& dvx, std::vector<float>& dvz,
-      std::vector<float>& dwx, std::vector<float>& dwy);
-  }
-}
 
 #ifdef HS_HAVE_SILO
 #include <silo.h>
@@ -77,13 +39,6 @@ namespace hs {
 // #include <pmpio.h>
 #endif
 
-namespace umesh {
-  UMesh::SP tetrahedralize(UMesh::SP in,
-                           int ownedTets,
-                           int ownedPyrs,
-                           int ownedWedges,
-                           int ownedHexes);
-}  
 namespace hs {
   
   SiloContent::SiloContent(const std::string &fileName,
@@ -1508,8 +1463,16 @@ size_t SiloContent::projectedSize()
           }
         }
         
+        // Zero-pad timestep and processor for proper sorting
+        std::ostringstream oss;
+        oss << std::setfill('0') << std::setw(6) << std::stoi(timestep.empty() ? "0" : timestep);
+        std::string paddedTimestep = oss.str();
+        oss.str("");
+        oss << std::setfill('0') << std::setw(4) << std::stoi(processorId.empty() ? "0" : processorId);
+        std::string paddedProcessorId = oss.str();
+        
         // Construct filename: iso_field_timestep.processor
-        outputFilePrefix += "iso_" + fieldName + "_" + timestep + "." + processorId;
+        outputFilePrefix += "iso_" + fieldName + "_" + paddedTimestep + "." + paddedProcessorId;
         
         // Compute mapped scalars for isosurface vertices
         std::vector<float> mappedScalars;
@@ -1665,8 +1628,16 @@ size_t SiloContent::projectedSize()
           }
         }
         
+        // Zero-pad timestep and processor for proper sorting
+        std::ostringstream ossAgx;
+        ossAgx << std::setfill('0') << std::setw(6) << std::stoi(timestep.empty() ? "0" : timestep);
+        std::string paddedTimestepAgx = ossAgx.str();
+        ossAgx.str("");
+        ossAgx << std::setfill('0') << std::setw(4) << std::stoi(processorId.empty() ? "0" : processorId);
+        std::string paddedProcessorIdAgx = ossAgx.str();
+        
         // Construct filename: iso_field_timestep.processor.agx
-        outputFilePath += "iso_" + fieldName + "_" + timestep + "." + processorId + ".agx";
+        outputFilePath += "iso_" + fieldName + "_" + paddedTimestepAgx + "." + paddedProcessorIdAgx + ".agx";
         
         std::cout << "Exporting AGX: " << outputFilePath << std::endl;
         
@@ -1706,6 +1677,7 @@ size_t SiloContent::projectedSize()
         
         // If we have a mapped scalar field, compute and add it
         if (!mappedScalarField.empty()) {
+          std::cout << "  Computing mapped scalar field: " << mappedScalarField << std::endl;
           std::vector<float> scalars;
           scalars.reserve(surf->vertices.size());
           
@@ -1764,9 +1736,23 @@ size_t SiloContent::projectedSize()
               scalars.push_back(isoValue);
           }
           
+          // Diagnostic: Check scalar range before writing
+          if (!scalars.empty()) {
+            float minScalar = scalars[0], maxScalar = scalars[0];
+            for (const auto &s : scalars) {
+              minScalar = std::min(minScalar, s);
+              maxScalar = std::max(maxScalar, s);
+            }
+            std::cout << "  AGX scalars: " << scalars.size() << " values, range=[" 
+                      << minScalar << " : " << maxScalar << "]" << std::endl;
+          }
+          
           // Add scalar field as per-timestep attribute
           agxSetTimeStepParameterArray1D(exporter, 0, "vertex.attribute0", ANARI_FLOAT32,
                                          scalars.data(), scalars.size());
+        } else {
+          std::cout << "  WARNING: No mapped scalar field specified - AGX will have no color attributes" << std::endl;
+          std::cout << "           Add 'mapped_scalar=lambda2' or 'ms=lambda2' to the URL" << std::endl;
         }
         
         // Write AGX file

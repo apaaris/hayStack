@@ -92,3 +92,53 @@ namespace hs {
   };
   
 }
+
+namespace umesh {
+  UMesh::SP tetrahedralize(UMesh::SP in,
+                           int ownedTets,
+                           int ownedPyrs,
+                           int ownedWedges,
+                           int ownedHexes);
+}  
+
+
+// Forward declarations for derived velocity field computations
+namespace hs {
+  namespace vorticity {
+    void computeVelocityGradients(
+      const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
+      int nx, int ny, int nz, float dx, float dy, const std::vector<float>& z,
+      std::vector<float>& dux, std::vector<float>& duy, std::vector<float>& duz,
+      std::vector<float>& dvx, std::vector<float>& dvy, std::vector<float>& dvz,
+      std::vector<float>& dwx, std::vector<float>& dwy, std::vector<float>& dwz);
+    
+    void computeLambda2(const std::vector<float>& dux, const std::vector<float>& duy, const std::vector<float>& duz,
+                        const std::vector<float>& dvx, const std::vector<float>& dvy, const std::vector<float>& dvz,
+                        const std::vector<float>& dwx, const std::vector<float>& dwy, const std::vector<float>& dwz,
+                        std::vector<float>& result);
+    
+    void computeQCriterion(const std::vector<float>& dux, const std::vector<float>& duy, const std::vector<float>& duz,
+                           const std::vector<float>& dvx, const std::vector<float>& dvy, const std::vector<float>& dvz,
+                           const std::vector<float>& dwx, const std::vector<float>& dwy, const std::vector<float>& dwz,
+                           std::vector<float>& result);
+    
+    void computeVorticity(const std::vector<float>& duy, const std::vector<float>& duz,
+                          const std::vector<float>& dvx, const std::vector<float>& dvz,
+                          const std::vector<float>& dwx, const std::vector<float>& dwy,
+                          std::vector<float>& result);
+    
+    void computeHelicity(const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
+                         const std::vector<float>& duy, const std::vector<float>& duz,
+                         const std::vector<float>& dvx, const std::vector<float>& dvz,
+                         const std::vector<float>& dwx, const std::vector<float>& dwy,
+                         std::vector<float>& result);
+    
+    // Specialized gradient computation for vorticity/helicity that only computes needed gradients
+    void computeVorticityGradients(
+      const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
+      int nx, int ny, int nz, float dx, float dy, const std::vector<float>& z,
+      std::vector<float>& duy, std::vector<float>& duz,
+      std::vector<float>& dvx, std::vector<float>& dvz,
+      std::vector<float>& dwx, std::vector<float>& dwy);
+  }
+}
