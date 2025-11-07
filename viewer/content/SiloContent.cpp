@@ -1907,24 +1907,6 @@ size_t SiloContent::projectedSize()
         // Write to file
         nanovdb::io::writeGrid(outputPath, handle);
         
-        // Write metadata file for merging script
-        std::string metaPath = outputPath + ".json";
-        std::ofstream metaFile(metaPath);
-        if (metaFile.is_open()) {
-          metaFile << "{\n";
-          metaFile << "  \"processor\": " << processorId << ",\n";
-          metaFile << "  \"timestep\": " << timestep << ",\n";
-          metaFile << "  \"fieldName\": \"" << fieldName << "\",\n";
-          metaFile << "  \"gridOrigin\": [" << gridOrigin.x << ", " << gridOrigin.y << ", " << gridOrigin.z << "],\n";
-          metaFile << "  \"gridSpacing\": [" << gridSpacing.x << ", " << gridSpacing.y << ", " << gridSpacing.z << "],\n";
-          metaFile << "  \"globalVoxelOffset\": [" << globalVoxelOffset.x << ", " << globalVoxelOffset.y << ", " << globalVoxelOffset.z << "],\n";
-          metaFile << "  \"numVoxels\": [" << numVoxels.x << ", " << numVoxels.y << ", " << numVoxels.z << "],\n";
-          metaFile << "  \"activeVoxels\": " << activeCount << ",\n";
-          metaFile << "  \"threshold\": " << nvdbThreshold << "\n";
-          metaFile << "}\n";
-          metaFile.close();
-        }
-        
         std::cout << "  Exported NanoVDB: " << outputPath << std::endl;
         std::cout << "  Active voxels: " << activeCount << " / " << (numVoxels.x * numVoxels.y * numVoxels.z)
                   << " (" << (100.0 * activeCount / (numVoxels.x * numVoxels.y * numVoxels.z)) << "%)" << std::endl;
