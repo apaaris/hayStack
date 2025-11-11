@@ -262,7 +262,7 @@ namespace hs {
       // Check if this is a derived variable
       bool isDerivedVar = (variableName == "lambda2" || variableName == "qCriterion" || 
                           variableName == "vorticity" || variableName == "helicity" ||
-                          variableName == "vel_mag");
+                          variableName == "vel_mag" || variableName == "temperature");
       
       const char *multivarName;
       if (isDerivedVar) {
@@ -669,7 +669,7 @@ size_t SiloContent::projectedSize()
       requestedVar = variableName.empty() ? varToLoad : variableName;
       isDerivedVar = (requestedVar == "lambda2" || requestedVar == "qCriterion" || 
                      requestedVar == "vorticity" || requestedVar == "helicity" ||
-                     requestedVar == "vel_mag");
+                     requestedVar == "vel_mag" || requestedVar == "temperature");
       // For derived vars in multi-mesh, we need vel1 for the mesh structure
       varname = isDerivedVar ? "vel1" : varToLoad.c_str();
     } else {
@@ -686,7 +686,7 @@ size_t SiloContent::projectedSize()
         requestedVar = variableName;
         isDerivedVar = (requestedVar == "lambda2" || requestedVar == "qCriterion" || 
                        requestedVar == "vorticity" || requestedVar == "helicity" ||
-                       requestedVar == "vel_mag");
+                       requestedVar == "vel_mag" || requestedVar == "temperature");
         varname = isDerivedVar ? "vel1" : variableName.c_str();
       } else {
         varname = toc->qvar_names[0];
@@ -1043,6 +1043,109 @@ size_t SiloContent::projectedSize()
         for (size_t i = 0; i < numScalars; i++) {
           derivedData[i] = std::sqrt(vel1Data[i]*vel1Data[i] + vel2Data[i]*vel2Data[i] + vel3Data[i]*vel3Data[i]);
         }
+      } else if (requestedVar == "temperature") {
+        // Temperature from ideal gas law: T = P / (rho * R_specific)
+        // For rocket exhaust (air-like mixture), R_specific ≈ 287 J/(kg·K)
+        const float R_SPECIFIC = 287.0f;  // Specific gas constant for air-like gas
+        
+        // Load pressure
+        std::vector<float> pressureData(numScalars);
+        DBquadvar *qvarPres = DBGetQuadvar(dbfile, "pres");
+        if (!qvarPres) {
+          std::cerr << "ERROR: Could not load pressure field 'pres' for temperature computation" << std::endl;
+          throw std::runtime_error("Temperature computation requires pressure field 'pres'");
+        }
+        
+        void *srcDataPres = qvarPres->vals[0];
+        int datatypePres = qvarPres->datatype;
+        size_t idx = 0;
+        
+        if (datatypePres == DB_FLOAT) {
+          float *typedSrc = (float*)srcDataPres;
+          for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+            for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+              for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                pressureData[idx++] = typedSrc[srcIdx];
+              }
+            }
+          }
+        } else if (datatypePres == DB_DOUBLE) {
+          double *typedSrc = (double*)srcDataPres;
+          for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+            for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+              for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                pressureData[idx++] = (float)typedSrc[srcIdx];
+              }
+            }
+          }
+        } else if (datatypePres == DB_INT) {
+          int *typedSrc = (int*)srcDataPres;
+          for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+            for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+              for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                pressureData[idx++] = (float)typedSrc[srcIdx];
+              }
+            }
+          }
+        }
+        DBFreeQuadvar(qvarPres);
+        
+        // Load density
+        std::vector<float> densityData(numScalars);
+        DBquadvar *qvarRho = DBGetQuadvar(dbfile, "rho");
+        if (!qvarRho) {
+          std::cerr << "ERROR: Could not load density field 'rho' for temperature computation" << std::endl;
+          throw std::runtime_error("Temperature computation requires density field 'rho'");
+        }
+        
+        void *srcDataRho = qvarRho->vals[0];
+        int datatypeRho = qvarRho->datatype;
+        idx = 0;
+        
+        if (datatypeRho == DB_FLOAT) {
+          float *typedSrc = (float*)srcDataRho;
+          for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+            for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+              for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                densityData[idx++] = typedSrc[srcIdx];
+              }
+            }
+          }
+        } else if (datatypeRho == DB_DOUBLE) {
+          double *typedSrc = (double*)srcDataRho;
+          for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+            for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+              for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                densityData[idx++] = (float)typedSrc[srcIdx];
+              }
+            }
+          }
+        } else if (datatypeRho == DB_INT) {
+          int *typedSrc = (int*)srcDataRho;
+          for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+            for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+              for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                densityData[idx++] = (float)typedSrc[srcIdx];
+              }
+            }
+          }
+        }
+        DBFreeQuadvar(qvarRho);
+        
+        // Compute temperature: T = P / (rho * R_specific)
+        for (size_t i = 0; i < numScalars; i++) {
+          if (densityData[i] > 1e-20f) {  // Avoid division by zero
+            derivedData[i] = pressureData[i] / (densityData[i] * R_SPECIFIC);
+          } else {
+            derivedData[i] = 0.0f;
+          }
+        }
       } else if (requestedVar == "lambda2" || requestedVar == "qCriterion") {
         // These fields need all 9 gradient components
         std::vector<float> dux(numScalars), duy(numScalars), duz(numScalars);
@@ -1184,7 +1287,7 @@ size_t SiloContent::projectedSize()
         // Check if this is a derived variable
         bool isMappedDerivedVar = (mappedScalarField == "lambda2" || mappedScalarField == "qCriterion" || 
                                    mappedScalarField == "vorticity" || mappedScalarField == "helicity" ||
-                                   mappedScalarField == "vel_mag");
+                                   mappedScalarField == "vel_mag" || mappedScalarField == "temperature");
         
         if (isMappedDerivedVar) {
           // Compute derived field for mapped scalar
@@ -1327,6 +1430,104 @@ size_t SiloContent::projectedSize()
               // Velocity magnitude - no gradients needed
               for (size_t i = 0; i < numScalars; i++) {
                 mappedScalarVolume[i] = std::sqrt(vel1Data[i]*vel1Data[i] + vel2Data[i]*vel2Data[i] + vel3Data[i]*vel3Data[i]);
+              }
+            } else if (mappedScalarField == "temperature") {
+              // Temperature from ideal gas law: T = P / (rho * R_specific)
+              const float R_SPECIFIC = 287.0f;  // Specific gas constant for air-like gas
+              
+              // Load pressure
+              std::vector<float> pressureData(numScalars);
+              DBquadvar *qvarPres = DBGetQuadvar(dbfile2, "pres");
+              
+              if (qvarPres) {
+                void *srcDataPres = qvarPres->vals[0];
+                int datatypePres = qvarPres->datatype;
+                size_t idx = 0;
+                
+                if (datatypePres == DB_FLOAT) {
+                  float *typedSrc = (float*)srcDataPres;
+                  for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                    for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                      for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                        size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                        pressureData[idx++] = typedSrc[srcIdx];
+                      }
+                    }
+                  }
+                } else if (datatypePres == DB_DOUBLE) {
+                  double *typedSrc = (double*)srcDataPres;
+                  for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                    for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                      for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                        size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                        pressureData[idx++] = (float)typedSrc[srcIdx];
+                      }
+                    }
+                  }
+                } else if (datatypePres == DB_INT) {
+                  int *typedSrc = (int*)srcDataPres;
+                  for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                    for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                      for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                        size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                        pressureData[idx++] = (float)typedSrc[srcIdx];
+                      }
+                    }
+                  }
+                }
+                DBFreeQuadvar(qvarPres);
+              }
+              
+              // Load density
+              std::vector<float> densityData(numScalars);
+              DBquadvar *qvarRho = DBGetQuadvar(dbfile2, "rho");
+              
+              if (qvarRho) {
+                void *srcDataRho = qvarRho->vals[0];
+                int datatypeRho = qvarRho->datatype;
+                size_t idx = 0;
+                
+                if (datatypeRho == DB_FLOAT) {
+                  float *typedSrc = (float*)srcDataRho;
+                  for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                    for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                      for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                        size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                        densityData[idx++] = typedSrc[srcIdx];
+                      }
+                    }
+                  }
+                } else if (datatypeRho == DB_DOUBLE) {
+                  double *typedSrc = (double*)srcDataRho;
+                  for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                    for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                      for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                        size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                        densityData[idx++] = (float)typedSrc[srcIdx];
+                      }
+                    }
+                  }
+                } else if (datatypeRho == DB_INT) {
+                  int *typedSrc = (int*)srcDataRho;
+                  for (int iz=loadRange.lower.z;iz<=loadRange.upper.z;iz++) {
+                    for (int iy=loadRange.lower.y;iy<=loadRange.upper.y;iy++) {
+                      for (int ix=loadRange.lower.x;ix<=loadRange.upper.x;ix++) {
+                        size_t srcIdx = ix + iy*size_t(blockDims.x) + iz*size_t(blockDims.x)*size_t(blockDims.y);
+                        densityData[idx++] = (float)typedSrc[srcIdx];
+                      }
+                    }
+                  }
+                }
+                DBFreeQuadvar(qvarRho);
+              }
+              
+              // Compute temperature
+              for (size_t i = 0; i < numScalars; i++) {
+                if (densityData[i] > 1e-20f) {
+                  mappedScalarVolume[i] = pressureData[i] / (densityData[i] * R_SPECIFIC);
+                } else {
+                  mappedScalarVolume[i] = 0.0f;
+                }
               }
             } else {
               // Build z coordinate array for non-uniform spacing
@@ -1825,14 +2026,31 @@ size_t SiloContent::projectedSize()
       nanovdb::GridBuilder<float> builder(0.0f);  // background value = 0
       auto accessor = builder.getAccessor();
       
-      // Compute global voxel offset from world origin and spacing
-      // This ensures each block writes to unique global voxel coordinates
-      vec3i globalVoxelOffset;
-      globalVoxelOffset.x = static_cast<int>(std::round(gridOrigin.x / gridSpacing.x));
-      globalVoxelOffset.y = static_cast<int>(std::round(gridOrigin.y / gridSpacing.y));
-      globalVoxelOffset.z = static_cast<int>(std::round(gridOrigin.z / gridSpacing.z));
+      // SPATIAL POSITIONING USING DOMAIN DECOMPOSITION MAP
+      // Same approach as AGX export: use the mesh origin and spacing extracted from silo
+      // The domain decomposition map was built by:
+      //   1. Sampling silo files to infer processor grid topology (numProcs)
+      //   2. Parsing processor ID from filename (e.g., /p75/4320.silo)
+      //   3. Reading each block's mesh coordinates to get exact spatial position
+      // Result: gridOrigin = world-space position, gridSpacing = cell size
       
-      // Add active voxels above threshold
+      // Parse processor ID from filename for metadata
+      int procID = -1;
+      if (isMultiMesh) {
+        procID = siloParseProcessorID(meshBlockName);
+        if (procID < 0) procID = thisPartID;
+      }
+      
+      // Compute processor coordinates in the grid (using same mapping as ghost cell logic)
+      vec3i procCoords(0);
+      if (procID >= 0 && (numProcs.x > 1 || numProcs.y > 1 || numProcs.z > 1)) {
+        procCoords.x = procID / (numProcs.y * numProcs.z);
+        procCoords.y = (procID % (numProcs.y * numProcs.z)) / numProcs.z;
+        procCoords.z = procID % numProcs.z;
+      }
+      
+      // Add active voxels using LOCAL coordinates (0 to numVoxels-1)
+      // World-space positioning is handled by gridOrigin and gridSpacing in the NanoVDB metadata
       size_t activeCount = 0;
       for (int iz = 0; iz < numVoxels.z; iz++) {
         for (int iy = 0; iy < numVoxels.y; iy++) {
@@ -1841,10 +2059,8 @@ size_t SiloContent::projectedSize()
             float value = floatData[idx];
             
             if (value > nvdbThreshold) {
-              // Use GLOBAL voxel coordinates for proper merging
-              nanovdb::Coord ijk(ix + globalVoxelOffset.x, 
-                                  iy + globalVoxelOffset.y, 
-                                  iz + globalVoxelOffset.z);
+              // Use LOCAL voxel coordinates (world positioning via transform below)
+              nanovdb::Coord ijk(ix, iy, iz);
               accessor.setValue(ijk, value);
               activeCount++;
             }
@@ -1853,10 +2069,13 @@ size_t SiloContent::projectedSize()
       }
       
       if (activeCount > 0) {
-        // Build the grid (voxel size, origin, name)
+        // Build the grid with EXACT world-space positioning from silo mesh
+        // gridOrigin = mesh origin from DBquadmesh (xCoords[0], yCoords[0], zCoords[0])
+        // gridSpacing = mesh spacing from DBquadmesh (xCoords[1]-xCoords[0], etc.)
+        // This encoding ensures each block is correctly positioned when loaded together
         auto handle = builder.getHandle<>(
-          static_cast<double>(gridSpacing.x),  // voxel size
-          nanovdb::Vec3d(gridOrigin.x, gridOrigin.y, gridOrigin.z),  // world origin
+          static_cast<double>(gridSpacing.x),  // voxel size from silo mesh
+          nanovdb::Vec3d(gridOrigin.x, gridOrigin.y, gridOrigin.z),  // world origin from silo mesh
           "density");  // grid name
         
         // Construct output filename with zero-padding
@@ -1910,6 +2129,20 @@ size_t SiloContent::projectedSize()
         std::cout << "  Exported NanoVDB: " << outputPath << std::endl;
         std::cout << "  Active voxels: " << activeCount << " / " << (numVoxels.x * numVoxels.y * numVoxels.z)
                   << " (" << (100.0 * activeCount / (numVoxels.x * numVoxels.y * numVoxels.z)) << "%)" << std::endl;
+        
+        // Display spatial positioning information (from domain decomposition map)
+        if (verbose || true) {  // Always show for NanoVDB to verify positioning
+          std::cout << "  Spatial positioning:" << std::endl;
+          if (procID >= 0) {
+            std::cout << "    Processor ID: " << procID << std::endl;
+            std::cout << "    Processor grid: " << numProcs.x << "x" << numProcs.y << "x" << numProcs.z 
+                      << " (" << (numProcs.x * numProcs.y * numProcs.z) << " total)" << std::endl;
+            std::cout << "    Processor coords: (" << procCoords.x << ", " << procCoords.y << ", " << procCoords.z << ")" << std::endl;
+          }
+          std::cout << "    World origin: (" << gridOrigin.x << ", " << gridOrigin.y << ", " << gridOrigin.z << ")" << std::endl;
+          std::cout << "    Voxel spacing: (" << gridSpacing.x << ", " << gridSpacing.y << ", " << gridSpacing.z << ")" << std::endl;
+          std::cout << "    Block dimensions: " << numVoxels.x << "x" << numVoxels.y << "x" << numVoxels.z << std::endl;
+        }
       } else {
         std::cout << "  WARNING: No voxels above threshold " << nvdbThreshold << ", skipping export" << std::endl;
       }
