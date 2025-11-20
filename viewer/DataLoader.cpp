@@ -29,6 +29,7 @@
 #include "viewer/content/DistData.h"
 #include "viewer/content/Capsules.h"
 #include "viewer/content/IsoDump.h"
+#include "viewer/content/SiloContent.h"
 
 namespace hs {
 
@@ -337,6 +338,8 @@ namespace hs {
       RAWVolumeContent::create(this,addIfRequired("raw://",contentDescriptor));
     } else if (endsWith(contentDescriptor,".tamr")) {
       TAMRContent::create(this,addIfRequired("tamr://",contentDescriptor));
+    } else if (endsWith(contentDescriptor,".silo")) {
+      SiloContent::create(this,contentDescriptor);
     } else {
       ResourceSpecifier url(contentDescriptor);
       if (url.type == "spheres")
@@ -364,6 +367,8 @@ namespace hs {
       else if (url.type == "spumesh")
         // spatially partitioned umeshes
         SpatiallyPartitionedUMeshContent::create(this,url);
+      else if (url.type == "silo")
+        SiloContent::create(this,url);
       else
         throw std::runtime_error
           ("could not recognize content type '"+url.type+"'");

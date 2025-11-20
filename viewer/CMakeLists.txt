@@ -51,6 +51,8 @@ set(SOURCES
   content/TAMRContent.cpp
   content/UMeshContent.h
   content/UMeshContent.cpp
+  content/SiloContent.h
+  content/SiloContent.cpp
   )  
 
 set(TFE_SOURCES
@@ -87,6 +89,7 @@ if (HS_VIEWER AND (TARGET barney))
     PUBLIC
     hayStack
     owl_viewer
+    ${SILO_LIBRARY}
     )
   target_compile_definitions(hsViewer PUBLIC -DHS_VIEWER=1)
   if (WIN32)
@@ -106,6 +109,7 @@ add_executable(hsOffline
 target_link_libraries(hsOffline
   PUBLIC
   hayStack
+  ${SILO_LIBRARY}
   )
 
 # ------------------------------------------------------------------
@@ -122,6 +126,7 @@ if (HS_CUTEE)
     PUBLIC
     hayStack
     qtOWL
+    ${SILO_LIBRARY}
     )
   target_compile_definitions(hsViewerQT PUBLIC -DHS_CUTEE=1)
   set_target_properties(hsViewerQT
