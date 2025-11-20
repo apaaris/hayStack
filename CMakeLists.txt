@@ -18,7 +18,7 @@ cmake_policy(SET CMP0048 NEW)
 
 cmake_minimum_required(VERSION 3.16)
 project(HayStack VERSION 0.1.0 LANGUAGES C CXX)
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_CUDA_USE_STATIC_CUDA_RUNTIME ON)
@@ -69,9 +69,9 @@ endif()
 # ------------------------------------------------------------------
 # OpenVDB library for NanoVDB export
 # ------------------------------------------------------------------
-find_library(OPENVDB_LIBRARY NAMES openvdb PATHS /home/aparis/viz/opt/lib /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib)
-find_path(OPENVDB_INCLUDE_DIR NAMES openvdb/openvdb.h PATHS /home/aparis/viz/opt/include /usr/include /usr/local/include)
-find_path(NANOVDB_INCLUDE_DIR NAMES nanovdb/NanoVDB.h PATHS /home/aparis/viz/opt/include /usr/include /usr/local/include)
+find_library(OPENVDB_LIBRARY NAMES openvdb PATHS /home/aparis/viz/opt/lib NO_DEFAULT_PATH)
+find_path(OPENVDB_INCLUDE_DIR NAMES openvdb/openvdb.h PATHS /home/aparis/viz/opt/include NO_DEFAULT_PATH)
+find_path(NANOVDB_INCLUDE_DIR NAMES nanovdb/NanoVDB.h PATHS /home/aparis/viz/opt/include NO_DEFAULT_PATH)
 
 if(OPENVDB_LIBRARY AND OPENVDB_INCLUDE_DIR AND NANOVDB_INCLUDE_DIR)
   message(STATUS "Found OpenVDB: ${OPENVDB_LIBRARY}")
