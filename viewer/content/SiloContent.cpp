@@ -74,6 +74,9 @@ namespace hs {
       // Manually populate the grid at the correct index location
       auto accessor = grid->getAccessor();
       size_t idx = 0;
+      openvdb::Coord minCoord(indexOrigin.x(), indexOrigin.y(), indexOrigin.z());
+      openvdb::Coord maxCoord(indexOrigin.x() + dims.x - 1, indexOrigin.y() + dims.y - 1, indexOrigin.z() + dims.z - 1);
+      
       for (int k = 0; k < dims.z; ++k) {
         for (int j = 0; j < dims.y; ++j) {
           for (int i = 0; i < dims.x; ++i) {
@@ -81,6 +84,11 @@ namespace hs {
             accessor.setValue(ijk, scalars[idx++]);
           }
         }
+      }
+      
+      if (verbose) {
+        std::cout << "#hs.silo:   Index range: (" << minCoord.x() << "," << minCoord.y() << "," << minCoord.z() << ") to ("
+                  << maxCoord.x() << "," << maxCoord.y() << "," << maxCoord.z() << ")" << std::endl;
       }
       
       // Convert OpenVDB grid to NanoVDB
