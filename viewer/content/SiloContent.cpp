@@ -19,8 +19,92 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <sstream>
+#include <iomanip>
+
+// OpenVDB and NanoVDB includes
+#define NANOVDB_USE_OPENVDB
+#include <openvdb/openvdb.h>
+#include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/io/IO.h>
 
 namespace hs {
+
+  // Helper function to export a structured volume to NanoVDB
+  static void exportToNanoVDB(const std::vector<float> &scalars,
+                               const vec3i &dims,
+                               const vec3f &gridOrigin,
+                               const vec3f &gridSpacing,
+                               const std::string &outputPath,
+                               int domainID,
+                               const std::string &varName,
+                               bool verbose)
+  {
+    try {
+      // Initialize OpenVDB (only needs to be called once)
+      static bool vdbInitialized = false;
+      if (!vdbInitialized) {
+        openvdb::initialize();
+        vdbInitialized = true;
+      }
+      
+      // Create an OpenVDB FloatGrid with uniform voxel spacing
+      openvdb::FloatGrid::Ptr grid = openvdb::FloatGrid::create();
+      grid->setName(varName);
+      grid->setGridClass(openvdb::GRID_FOG_VOLUME);
+      
+      // Set transform with voxel spacing
+      openvdb::math::Transform::Ptr transform = openvdb::math::Transform::createLinearTransform(gridSpacing.x);
+      grid->setTransform(transform);
+      
+      // Calculate the voxel index origin for this domain
+      // This ensures each domain is placed at the correct location in index space
+      openvdb::Coord indexOrigin(
+        int(std::round(gridOrigin.x / gridSpacing.x)),
+        int(std::round(gridOrigin.y / gridSpacing.y)),
+        int(std::round(gridOrigin.z / gridSpacing.z))
+      );
+      
+      if (verbose) {
+        std::cout << "#hs.silo:   NanoVDB export: origin=" << gridOrigin 
+                  << " indexOrigin=(" << indexOrigin.x() << "," << indexOrigin.y() << "," << indexOrigin.z() << ")"
+                  << " dims=" << dims << std::endl;
+      }
+      
+      // Manually populate the grid at the correct index location
+      auto accessor = grid->getAccessor();
+      size_t idx = 0;
+      for (int k = 0; k < dims.z; ++k) {
+        for (int j = 0; j < dims.y; ++j) {
+          for (int i = 0; i < dims.x; ++i) {
+            openvdb::Coord ijk(indexOrigin.x() + i, indexOrigin.y() + j, indexOrigin.z() + k);
+            accessor.setValue(ijk, scalars[idx++]);
+          }
+        }
+      }
+      
+      // Convert OpenVDB grid to NanoVDB
+      auto handle = nanovdb::tools::openToNanoVDB(grid);
+      
+      // Create filename with domain ID
+      std::ostringstream filename;
+      filename << outputPath;
+      if (outputPath.back() != '/')
+        filename << "/";
+      filename << "silo_" << varName << "_domain_" 
+                << std::setfill('0') << std::setw(4) << domainID << ".nvdb";
+      
+      // Write to file
+      nanovdb::io::writeGrid(filename.str(), handle);
+      
+      if (verbose) {
+        std::cout << "#hs.silo:   Exported NanoVDB: " << filename.str() << std::endl;
+      }
+    } catch (const std::exception &e) {
+      std::cerr << "#hs.silo: Error exporting NanoVDB for domain " << domainID 
+                << ": " << e.what() << std::endl;
+    }
+  }
 
   SiloContent::SiloContent(const std::string &fileName)
     : fileName(fileName),
@@ -33,7 +117,8 @@ namespace hs {
     : fileName(resource.where),
       fileSize(getFileSize(resource.where)),
       partID(partID),
-      requestedVar(resource.get("var", ""))
+      requestedVar(resource.get("var", "")),
+      nvdbExportPath(resource.get("nvdb", ""))
   {
   }
 
@@ -67,6 +152,8 @@ namespace hs {
       DBmultimesh *mm = DBGetMultimesh(dbfile, toc->multimesh_names[0]);
       if (mm) {
         numDomains = mm->nblocks;
+        std::cout << "#hs.silo: Found " << numDomains << " domains in multimesh '" 
+                  << toc->multimesh_names[0] << "'" << std::endl;
         DBFreeMultimesh(mm);
       }
     }
@@ -534,6 +621,13 @@ namespace hs {
         dataRank.structuredVolumes.push_back(vol);
         if (verbose)
           std::cout << "#hs.silo:   Added structured volume with " << scalars.size() << " scalars" << std::endl;
+        
+        // Export to NanoVDB if requested
+        if (!nvdbExportPath.empty()) {
+          std::string varNameForExport = requestedVar.empty() ? "data" : requestedVar;
+          exportToNanoVDB(scalars, actualDims, gridOrigin, gridSpacing,
+                         nvdbExportPath, partID, varNameForExport, verbose);
+        }
       } else {
         // No scalars found - create a dummy volume so we can at least see the grid
         if (verbose)

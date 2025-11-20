@@ -67,6 +67,23 @@ else()
 endif()
 
 # ------------------------------------------------------------------
+# OpenVDB library for NanoVDB export
+# ------------------------------------------------------------------
+find_library(OPENVDB_LIBRARY NAMES openvdb PATHS /home/aparis/viz/opt/lib /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib)
+find_path(OPENVDB_INCLUDE_DIR NAMES openvdb/openvdb.h PATHS /home/aparis/viz/opt/include /usr/include /usr/local/include)
+find_path(NANOVDB_INCLUDE_DIR NAMES nanovdb/NanoVDB.h PATHS /home/aparis/viz/opt/include /usr/include /usr/local/include)
+
+if(OPENVDB_LIBRARY AND OPENVDB_INCLUDE_DIR AND NANOVDB_INCLUDE_DIR)
+  message(STATUS "Found OpenVDB: ${OPENVDB_LIBRARY}")
+  message(STATUS "Found NanoVDB: ${NANOVDB_INCLUDE_DIR}")
+  set(OPENVDB_FOUND TRUE)
+  include_directories(${OPENVDB_INCLUDE_DIR} ${NANOVDB_INCLUDE_DIR})
+else()
+  message(WARNING "OpenVDB/NanoVDB not found. NanoVDB export will not be available.")
+  set(OPENVDB_FOUND FALSE)
+endif()
+
+# ------------------------------------------------------------------
 # owl - do this first so miniScene can pick it up
 # ------------------------------------------------------------------
 if (NOT (TARGET miniScene))

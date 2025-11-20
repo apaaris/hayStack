@@ -90,6 +90,7 @@ if (HS_VIEWER AND (TARGET barney))
     hayStack
     owl_viewer
     ${SILO_LIBRARY}
+    ${OPENVDB_LIBRARY}
     )
   target_compile_definitions(hsViewer PUBLIC -DHS_VIEWER=1)
   if (WIN32)
@@ -110,6 +111,7 @@ target_link_libraries(hsOffline
   PUBLIC
   hayStack
   ${SILO_LIBRARY}
+  ${OPENVDB_LIBRARY}
   )
 
 # ------------------------------------------------------------------
@@ -127,6 +129,7 @@ if (HS_CUTEE)
     hayStack
     qtOWL
     ${SILO_LIBRARY}
+    ${OPENVDB_LIBRARY}
     )
   target_compile_definitions(hsViewerQT PUBLIC -DHS_CUTEE=1)
   set_target_properties(hsViewerQT

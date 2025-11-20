@@ -38,7 +38,8 @@ namespace hs {
     const std::string fileName;
     const size_t      fileSize;
     const int         partID;
-    std::string       requestedVar; // Optional: specific variable to load
+    std::string       requestedVar;  // Optional: specific variable to load
+    std::string       nvdbExportPath; // Optional: export to NanoVDB
     
   private:
     // Helper methods to read different mesh types
