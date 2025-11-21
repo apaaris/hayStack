@@ -524,53 +524,79 @@ namespace hs {
                 if (verbose)
                   std::cout << "#hs.silo:   Skipping vector variable: " << var_name 
                             << " (nvals=" << qv->nvals << ")" << std::endl;
-              } else {
-                // Allocate and copy scalar data
-                // Following VisIt's approach: read the entire variable including ghost zones
-                // The variable dimensions might differ from mesh dimensions due to ghost zones
-                int var_nels = qv->nels;  // Use actual element count from Silo
-                
-                if (verbose && qv->nels != var_dims[0] * var_dims[1] * var_dims[2]) {
-                  std::cerr << "#hs.silo:   Warning: variable nels (" << qv->nels 
-                            << ") doesn't match computed size (" 
-                            << var_dims[0] * var_dims[1] * var_dims[2] << ")" << std::endl;
-                }
-                
-                // Read the entire variable data (including ghost zones if present)
-                scalars.resize(var_nels);
-                
-                if (qv->datatype == DB_FLOAT) {
-                  float *data = (float*)qv->vals[0];
-                  if (data) {
-                    for (int i = 0; i < var_nels; i++) {
-                      scalars[i] = data[i];
-                    }
-                  }
-                } else if (qv->datatype == DB_DOUBLE) {
-                  double *data = (double*)qv->vals[0];
-                  if (data) {
-                    for (int i = 0; i < var_nels; i++) {
-                      scalars[i] = (float)data[i];
-                    }
-                  }
                 } else {
-                  if (verbose)
-                    std::cerr << "#hs.silo:   Unsupported data type: " << qv->datatype << std::endl;
-                }
-                
-                if (verbose && !scalars.empty()) {
-                  float min_val = scalars[0], max_val = scalars[0];
-                  for (float v : scalars) {
-                    if (v < min_val) min_val = v;
-                    if (v > max_val) max_val = v;
+                  // Extract only the real (non-ghost) portion of the variable data
+                  // Visit reads all data but marks ghosts; we extract only real data for StructuredVolume
+                  
+                  // Determine the real data range based on centering
+                  int var_min[3], var_max[3];
+                  for (int d = 0; d < 3; d++) {
+                    if (var_dims[d] == dims[d]) {
+                      // Node-centered: use mesh min/max_index directly
+                      var_min[d] = min_index[d];
+                      var_max[d] = max_index[d];
+                    } else if (var_dims[d] == dims[d] - 1) {
+                      // Zone-centered: zone indices already match
+                      var_min[d] = min_index[d];
+                      var_max[d] = max_index[d];
+                    } else {
+                      // Unknown centering, use full range (no ghosts to extract)
+                      var_min[d] = 0;
+                      var_max[d] = var_dims[d] - 1;
+                    }
                   }
-                  std::cout << "#hs.silo:   Loaded scalar variable: " << var_name 
-                            << " (" << var_nels << " elements";
-                  if (hasGhostZones) {
-                    std::cout << " including ghost zones";
+                  
+                  // Calculate dimensions of real data
+                  int real_dims[3] = {
+                    var_max[0] - var_min[0] + 1,
+                    var_max[1] - var_min[1] + 1,
+                    var_max[2] - var_min[2] + 1
+                  };
+                  int real_nels = real_dims[0] * real_dims[1] * real_dims[2];
+                  scalars.resize(real_nels);
+                  
+                  // Extract only the real (non-ghost) portion
+                  if (qv->datatype == DB_FLOAT) {
+                    float *data = (float*)qv->vals[0];
+                    if (data) {
+                      int idx = 0;
+                      for (int k = var_min[2]; k <= var_max[2]; k++) {
+                        for (int j = var_min[1]; j <= var_max[1]; j++) {
+                          for (int i = var_min[0]; i <= var_max[0]; i++) {
+                            int src_idx = i + var_dims[0] * (j + var_dims[1] * k);
+                            scalars[idx++] = data[src_idx];
+                          }
+                        }
+                      }
+                    }
+                  } else if (qv->datatype == DB_DOUBLE) {
+                    double *data = (double*)qv->vals[0];
+                    if (data) {
+                      int idx = 0;
+                      for (int k = var_min[2]; k <= var_max[2]; k++) {
+                        for (int j = var_min[1]; j <= var_max[1]; j++) {
+                          for (int i = var_min[0]; i <= var_max[0]; i++) {
+                            int src_idx = i + var_dims[0] * (j + var_dims[1] * k);
+                            scalars[idx++] = (float)data[src_idx];
+                          }
+                        }
+                      }
+                    }
+                  } else {
+                    if (verbose)
+                      std::cerr << "#hs.silo:   Unsupported data type: " << qv->datatype << std::endl;
                   }
-                  std::cout << ", range: [" << min_val << ":" << max_val << "])" << std::endl;
-                }
+                  
+                  if (verbose && !scalars.empty()) {
+                    float min_val = scalars[0], max_val = scalars[0];
+                    for (float v : scalars) {
+                      if (v < min_val) min_val = v;
+                      if (v > max_val) max_val = v;
+                    }
+                    std::cout << "#hs.silo:   Loaded scalar variable: " << var_name 
+                              << " (" << real_nels << " real elements from " << qv->nels << " total"
+                              << ", range: [" << min_val << ":" << max_val << "])" << std::endl;
+                  }
                 
                 // If we found the requested variable, stop looking
                 if (!requestedVar.empty()) {
@@ -588,44 +614,29 @@ namespace hs {
       }
 
       if (!scalars.empty()) {
-        // Determine actual volume dimensions from scalar count
-        // Following VisIt: the variable data matches the FULL mesh dims (including ghost zones)
-        // dims[] is the full mesh dimensions, volumeDims is just the real (non-ghost) region
-        vec3i actualDims;
+        // Use the real (non-ghost) volume dimensions
+        // volumeDims was already calculated from the real region (min_index to max_index)
+        vec3i actualDims = volumeDims;
         size_t actual_count = scalars.size();
         
-        // Try to match against full mesh dimensions (node or zone centered)
-        int mesh_nodes = dims[0] * dims[1] * dims[2];
-        int mesh_zones = (dims[0] - 1) * (dims[1] - 1) * (dims[2] - 1);
+        // Check if data is zone-centered (one less in each dimension)
+        size_t expected_node = volumeDims.x * volumeDims.y * volumeDims.z;
+        size_t expected_zone = (volumeDims.x-1) * (volumeDims.y-1) * (volumeDims.z-1);
         
-        if (actual_count == mesh_nodes) {
-          // Node-centered data (matches full mesh node count)
-          actualDims = vec3i(dims[0], dims[1], dims[2]);
+        if (actual_count == expected_zone) {
+          // Zone-centered data
+          actualDims = vec3i(volumeDims.x-1, volumeDims.y-1, volumeDims.z-1);
           if (verbose)
-            std::cout << "#hs.silo:   Node-centered data, dims: " << actualDims 
-                      << (hasGhostZones ? " (includes ghost zones)" : "") << std::endl;
-        } else if (actual_count == mesh_zones) {
-          // Zone-centered data (matches full mesh zone count)
-          actualDims = vec3i(dims[0] - 1, dims[1] - 1, dims[2] - 1);
+            std::cout << "#hs.silo:   Zone-centered data, dims: " << actualDims << std::endl;
+        } else if (actual_count == expected_node) {
+          // Node-centered data
           if (verbose)
-            std::cout << "#hs.silo:   Zone-centered data, dims: " << actualDims 
-                      << (hasGhostZones ? " (includes ghost zones)" : "") << std::endl;
+            std::cout << "#hs.silo:   Node-centered data, dims: " << actualDims << std::endl;
         } else {
-          // Unexpected size - try to infer cubic dimensions
-          int dim_estimate = (int)(std::cbrt((double)actual_count) + 0.5);
-          if (dim_estimate * dim_estimate * dim_estimate == (int)actual_count) {
-            actualDims = vec3i(dim_estimate, dim_estimate, dim_estimate);
-            if (verbose)
-              std::cout << "#hs.silo:   Inferred cubic dimensions: " << actualDims << std::endl;
-          } else {
-            // Fallback: use mesh dimensions and hope for the best
-            actualDims = vec3i(dims[0], dims[1], dims[2]);
-            if (verbose) {
-              std::cerr << "#hs.silo:   Warning: scalar count " << actual_count 
-                        << " doesn't match mesh_nodes (" << mesh_nodes 
-                        << ") or mesh_zones (" << mesh_zones << "). Using full mesh dims." << std::endl;
-            }
-          }
+          if (verbose)
+            std::cerr << "#hs.silo:   Warning: scalar count " << actual_count 
+                      << " doesn't match expected node (" << expected_node 
+                      << ") or zone (" << expected_zone << ") count. Using volumeDims anyway." << std::endl;
         }
         
         // Convert scalars to raw data
