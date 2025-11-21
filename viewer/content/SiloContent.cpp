@@ -76,15 +76,40 @@ namespace hs {
       grid->setGridClass(openvdb::GRID_FOG_VOLUME);
       
       // Set transform with voxel spacing
-      openvdb::math::Transform::Ptr transform = openvdb::math::Transform::createLinearTransform(gridSpacing.x);
+      // OpenVDB requires voxel spacing to be reasonable (not too small)
+      // Scale the spacing to be around 1.0 for numerical stability
+      double scaleFactor = 1.0 / gridSpacing.x;  // Normalize based on X spacing
+      vec3f scaledSpacing = vec3f(
+        gridSpacing.x * scaleFactor,
+        gridSpacing.y * scaleFactor,
+        gridSpacing.z * scaleFactor
+      );
+      
+      if (verbose) {
+        std::cerr << "#hs.silo:   Original gridSpacing = (" << gridSpacing.x << ", " << gridSpacing.y << ", " << gridSpacing.z << ")" << std::endl;
+        std::cerr << "#hs.silo:   Scale factor = " << scaleFactor << std::endl;
+        std::cerr << "#hs.silo:   Scaled gridSpacing = (" << scaledSpacing.x << ", " << scaledSpacing.y << ", " << scaledSpacing.z << ")" << std::endl;
+      }
+      
+      openvdb::math::Transform::Ptr transform = openvdb::math::Transform::createLinearTransform(scaledSpacing.x);
       grid->setTransform(transform);
+      
+      if (verbose) {
+        std::cerr << "#hs.silo:   Transform created successfully for domain " << domainID << std::endl;
+      }
       
       // Calculate the voxel index origin for this domain
       // This ensures each domain is placed at the correct location in index space
+      // Use scaled spacing for consistency with the transform
+      vec3f scaledOrigin = vec3f(
+        gridOrigin.x * scaleFactor,
+        gridOrigin.y * scaleFactor,
+        gridOrigin.z * scaleFactor
+      );
       openvdb::Coord indexOrigin(
-        int(std::round(gridOrigin.x / gridSpacing.x)),
-        int(std::round(gridOrigin.y / gridSpacing.y)),
-        int(std::round(gridOrigin.z / gridSpacing.z))
+        int(std::round(scaledOrigin.x / scaledSpacing.x)),
+        int(std::round(scaledOrigin.y / scaledSpacing.y)),
+        int(std::round(scaledOrigin.z / scaledSpacing.z))
       );
       
       if (verbose) {
@@ -463,6 +488,30 @@ namespace hs {
         }
         
         if (verbose) {
+          std::cout << "#hs.silo:   Domain " << partID << " grid spacing calculation:" << std::endl;
+          std::cout << "#hs.silo:     min_index = (" << min_index[0] << ", " << min_index[1] << ", " << min_index[2] << ")" << std::endl;
+          std::cout << "#hs.silo:     max_index = (" << max_index[0] << ", " << max_index[1] << ", " << max_index[2] << ")" << std::endl;
+          std::cout << "#hs.silo:     Index deltas = (" 
+                    << (max_index[0] - min_index[0]) << ", "
+                    << (max_index[1] - min_index[1]) << ", "
+                    << (max_index[2] - min_index[2]) << ")" << std::endl;
+          if (qm->datatype == DB_FLOAT) {
+            float *x_coords = (float*)qm->coords[0];
+            float *y_coords = (float*)qm->coords[1];
+            float *z_coords = (float*)qm->coords[2];
+            std::cout << "#hs.silo:     Coord deltas (float) = ("
+                      << (x_coords[max_index[0]] - x_coords[min_index[0]]) << ", "
+                      << (y_coords[max_index[1]] - y_coords[min_index[1]]) << ", "
+                      << (z_coords[max_index[2]] - z_coords[min_index[2]]) << ")" << std::endl;
+          } else if (qm->datatype == DB_DOUBLE) {
+            double *x_coords = (double*)qm->coords[0];
+            double *y_coords = (double*)qm->coords[1];
+            double *z_coords = (double*)qm->coords[2];
+            std::cout << "#hs.silo:     Coord deltas (double) = ("
+                      << (x_coords[max_index[0]] - x_coords[min_index[0]]) << ", "
+                      << (y_coords[max_index[1]] - y_coords[min_index[1]]) << ", "
+                      << (z_coords[max_index[2]] - z_coords[min_index[2]]) << ")" << std::endl;
+          }
           std::cout << "#hs.silo:   Rectilinear grid - origin: " << gridOrigin
                     << ", spacing: " << gridSpacing << std::endl;
         }
@@ -556,6 +605,8 @@ namespace hs {
                   scalars.resize(real_nels);
                   
                   // Extract only the real (non-ghost) portion
+                  int total_var_els = var_dims[0] * var_dims[1] * var_dims[2];
+                  
                   if (qv->datatype == DB_FLOAT) {
                     float *data = (float*)qv->vals[0];
                     if (data) {
@@ -564,6 +615,17 @@ namespace hs {
                         for (int j = var_min[1]; j <= var_max[1]; j++) {
                           for (int i = var_min[0]; i <= var_max[0]; i++) {
                             int src_idx = i + var_dims[0] * (j + var_dims[1] * k);
+                            if (src_idx < 0 || src_idx >= total_var_els) {
+                              if (verbose) {
+                                std::cerr << "#hs.silo: ERROR: Out of bounds access at domain " << partID 
+                                          << ": src_idx=" << src_idx << " >= " << total_var_els 
+                                          << " (i=" << i << ",j=" << j << ",k=" << k << ")" 
+                                          << " var_dims=(" << var_dims[0] << "," << var_dims[1] << "," << var_dims[2] << ")"
+                                          << " var_range=[(" << var_min[0] << "," << var_min[1] << "," << var_min[2] << ") to ("
+                                          << var_max[0] << "," << var_max[1] << "," << var_max[2] << ")]" << std::endl;
+                              }
+                              continue;  // Skip this element
+                            }
                             scalars[idx++] = data[src_idx];
                           }
                         }
@@ -577,6 +639,17 @@ namespace hs {
                         for (int j = var_min[1]; j <= var_max[1]; j++) {
                           for (int i = var_min[0]; i <= var_max[0]; i++) {
                             int src_idx = i + var_dims[0] * (j + var_dims[1] * k);
+                            if (src_idx < 0 || src_idx >= total_var_els) {
+                              if (verbose) {
+                                std::cerr << "#hs.silo: ERROR: Out of bounds access at domain " << partID 
+                                          << ": src_idx=" << src_idx << " >= " << total_var_els 
+                                          << " (i=" << i << ",j=" << j << ",k=" << k << ")" 
+                                          << " var_dims=(" << var_dims[0] << "," << var_dims[1] << "," << var_dims[2] << ")"
+                                          << " var_range=[(" << var_min[0] << "," << var_min[1] << "," << var_min[2] << ") to ("
+                                          << var_max[0] << "," << var_max[1] << "," << var_max[2] << ")]" << std::endl;
+                              }
+                              continue;  // Skip this element
+                            }
                             scalars[idx++] = (float)data[src_idx];
                           }
                         }
