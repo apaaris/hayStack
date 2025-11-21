@@ -18,6 +18,7 @@
 #include "umesh/UMesh.h"
 #include <iostream>
 #include <cstring>
+#include <cmath>
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
@@ -41,6 +42,27 @@ namespace hs {
                                bool verbose)
   {
     try {
+      // Check for valid grid spacing (OpenVDB requires non-zero values)
+      const float epsilon = 1e-10f;
+      if (std::abs(gridSpacing.x) < epsilon || 
+          std::abs(gridSpacing.y) < epsilon || 
+          std::abs(gridSpacing.z) < epsilon) {
+        if (verbose) {
+          std::cerr << "#hs.silo: Skipping NanoVDB export for domain " << domainID 
+                    << ": invalid grid spacing " << gridSpacing << std::endl;
+        }
+        return;
+      }
+      
+      // Check for valid dimensions
+      if (dims.x <= 0 || dims.y <= 0 || dims.z <= 0) {
+        if (verbose) {
+          std::cerr << "#hs.silo: Skipping NanoVDB export for domain " << domainID 
+                    << ": invalid dimensions " << dims << std::endl;
+        }
+        return;
+      }
+      
       // Initialize OpenVDB (only needs to be called once)
       static bool vdbInitialized = false;
       if (!vdbInitialized) {
