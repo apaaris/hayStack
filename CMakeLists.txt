@@ -78,6 +78,13 @@ if(OPENVDB_LIBRARY AND OPENVDB_INCLUDE_DIR AND NANOVDB_INCLUDE_DIR)
   message(STATUS "Found NanoVDB: ${NANOVDB_INCLUDE_DIR}")
   set(OPENVDB_FOUND TRUE)
   include_directories(${OPENVDB_INCLUDE_DIR} ${NANOVDB_INCLUDE_DIR})
+  
+  # OpenVDB requires Boost
+  find_package(Boost REQUIRED)
+  if(Boost_FOUND)
+    message(STATUS "Found Boost: ${Boost_INCLUDE_DIRS}")
+    include_directories(${Boost_INCLUDE_DIRS})
+  endif()
 else()
   message(WARNING "OpenVDB/NanoVDB not found. NanoVDB export will not be available.")
   set(OPENVDB_FOUND FALSE)
