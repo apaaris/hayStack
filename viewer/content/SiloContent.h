@@ -40,6 +40,7 @@ namespace hs {
     const int         partID;
     std::string       requestedVar;  // Optional: specific variable to load
     std::string       nvdbExportPath; // Optional: export to NanoVDB
+    float             nvdbThreshold;  // Optional: threshold for NanoVDB export (default -inf)
     
   private:
     // Helper methods to read different mesh types

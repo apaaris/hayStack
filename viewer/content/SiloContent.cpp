@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#include <limits>
 
 // OpenVDB and NanoVDB includes
 #define NANOVDB_USE_OPENVDB
@@ -39,6 +40,7 @@ namespace hs {
                                const std::string &outputPath,
                                int domainID,
                                const std::string &varName,
+                               float threshold,
                                bool verbose)
   {
     try {
@@ -119,23 +121,40 @@ namespace hs {
       }
       
       // Manually populate the grid at the correct index location
+      // Only set voxels above the threshold
       auto accessor = grid->getAccessor();
       size_t idx = 0;
+      size_t voxelsAboveThreshold = 0;
       openvdb::Coord minCoord(indexOrigin.x(), indexOrigin.y(), indexOrigin.z());
       openvdb::Coord maxCoord(indexOrigin.x() + dims.x - 1, indexOrigin.y() + dims.y - 1, indexOrigin.z() + dims.z - 1);
       
       for (int k = 0; k < dims.z; ++k) {
         for (int j = 0; j < dims.y; ++j) {
           for (int i = 0; i < dims.x; ++i) {
-            openvdb::Coord ijk(indexOrigin.x() + i, indexOrigin.y() + j, indexOrigin.z() + k);
-            accessor.setValue(ijk, scalars[idx++]);
+            float value = scalars[idx++];
+            if (value > threshold) {
+              openvdb::Coord ijk(indexOrigin.x() + i, indexOrigin.y() + j, indexOrigin.z() + k);
+              accessor.setValue(ijk, value);
+              voxelsAboveThreshold++;
+            }
           }
         }
+      }
+      
+      // Skip export if no voxels are above threshold
+      if (voxelsAboveThreshold == 0) {
+        if (verbose) {
+          std::cout << "#hs.silo:   Skipping domain " << domainID 
+                    << ": no voxels above threshold " << threshold << std::endl;
+        }
+        return;
       }
       
       if (verbose) {
         std::cout << "#hs.silo:   Index range: (" << minCoord.x() << "," << minCoord.y() << "," << minCoord.z() << ") to ("
                   << maxCoord.x() << "," << maxCoord.y() << "," << maxCoord.z() << ")" << std::endl;
+        std::cout << "#hs.silo:   Voxels above threshold (" << threshold << "): " 
+                  << voxelsAboveThreshold << " / " << scalars.size() << std::endl;
       }
       
       // Convert OpenVDB grid to NanoVDB
@@ -164,7 +183,8 @@ namespace hs {
   SiloContent::SiloContent(const std::string &fileName)
     : fileName(fileName),
       fileSize(getFileSize(fileName)),
-      partID(-1)
+      partID(-1),
+      nvdbThreshold(-std::numeric_limits<float>::infinity())
   {
   }
 
@@ -173,7 +193,8 @@ namespace hs {
       fileSize(getFileSize(resource.where)),
       partID(partID),
       requestedVar(resource.get("var", "")),
-      nvdbExportPath(resource.get("nvdb", ""))
+      nvdbExportPath(resource.get("nvdb", "")),
+      nvdbThreshold(std::stof(resource.get("nvdb_t", "-inf")))
   {
   }
 
@@ -729,7 +750,7 @@ namespace hs {
         if (!nvdbExportPath.empty()) {
           std::string varNameForExport = requestedVar.empty() ? "data" : requestedVar;
           exportToNanoVDB(scalars, actualDims, gridOrigin, gridSpacing,
-                         nvdbExportPath, partID, varNameForExport, verbose);
+                         nvdbExportPath, partID, varNameForExport, nvdbThreshold, verbose);
         }
       } else {
         // No scalars found - create a dummy volume so we can at least see the grid
