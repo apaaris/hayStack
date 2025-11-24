@@ -314,6 +314,74 @@ namespace hs {
       result[i] = -std::min(eig2, 0.0f);
     }
   }
+  
+  // Mask boundary faces with zeros to hide artifacts from boundary conditions
+  // The mask_faces array indicates which faces to mask: [minX, maxX, minY, maxY, minZ, maxZ]
+  static void maskBoundaryFaces(std::vector<float>& data, int nx, int ny, int nz, 
+                                 bool mask_faces[6])
+  {
+    const int mask_depth = 10;  // Number of cells to mask on each face
+    
+    // Mask X faces if indicated
+    if (mask_faces[0] || mask_faces[1]) {
+      for (int k = 0; k < nz; ++k) {
+        for (int j = 0; j < ny; ++j) {
+          // Lower X face (i = 0 to mask_depth-1)
+          if (mask_faces[0]) {
+            for (int i = 0; i < std::min(mask_depth, nx); ++i) {
+              data[i + j*nx + k*nx*ny] = 0.0f;
+            }
+          }
+          // Upper X face (i = nx-mask_depth to nx-1)
+          if (mask_faces[1]) {
+            for (int i = std::max(0, nx - mask_depth); i < nx; ++i) {
+              data[i + j*nx + k*nx*ny] = 0.0f;
+            }
+          }
+        }
+      }
+    }
+    
+    // Mask Y faces if indicated
+    if (mask_faces[2] || mask_faces[3]) {
+      for (int k = 0; k < nz; ++k) {
+        for (int i = 0; i < nx; ++i) {
+          // Lower Y face (j = 0 to mask_depth-1)
+          if (mask_faces[2]) {
+            for (int j = 0; j < std::min(mask_depth, ny); ++j) {
+              data[i + j*nx + k*nx*ny] = 0.0f;
+            }
+          }
+          // Upper Y face (j = ny-mask_depth to ny-1)
+          if (mask_faces[3]) {
+            for (int j = std::max(0, ny - mask_depth); j < ny; ++j) {
+              data[i + j*nx + k*nx*ny] = 0.0f;
+            }
+          }
+        }
+      }
+    }
+    
+    // Mask Z faces if indicated
+    if (mask_faces[4] || mask_faces[5]) {
+      for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+          // Lower Z face (k = 0 to mask_depth-1)
+          if (mask_faces[4]) {
+            for (int k = 0; k < std::min(mask_depth, nz); ++k) {
+              data[i + j*nx + k*nx*ny] = 0.0f;
+            }
+          }
+          // Upper Z face (k = nz-mask_depth to nz-1)
+          if (mask_faces[5]) {
+            for (int k = std::max(0, nz - mask_depth); k < nz; ++k) {
+              data[i + j*nx + k*nx*ny] = 0.0f;
+            }
+          }
+        }
+      }
+    }
+  }
 
   // Helper function to load a specific scalar variable from a quad mesh
   static bool loadQuadVar(DBfile *dbfile, 
@@ -909,6 +977,27 @@ namespace hs {
             // Compute lambda2
             scalars.resize(len);
             computeLambda2(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, scalars);
+            
+            // Determine which faces are on the global domain boundary
+            // Faces without ghost zones (min_index == 0 or max_index == dims-1) are boundary faces
+            bool mask_faces[6] = {false, false, false, false, false, false};
+            // [0] = minX, [1] = maxX, [2] = minY, [3] = maxY, [4] = minZ, [5] = maxZ
+            
+            mask_faces[0] = (min_index[0] == 0);                // Lower X boundary
+            mask_faces[1] = (max_index[0] == dims[0] - 1);      // Upper X boundary
+            mask_faces[2] = (min_index[1] == 0);                // Lower Y boundary
+            mask_faces[3] = (max_index[1] == dims[1] - 1);      // Upper Y boundary
+            mask_faces[4] = (min_index[2] == 0);                // Lower Z boundary
+            mask_faces[5] = (max_index[2] == dims[2] - 1);      // Upper Z boundary
+            
+            // Apply masking to boundary faces only
+            bool has_boundary_faces = mask_faces[0] || mask_faces[1] || mask_faces[2] || 
+                                       mask_faces[3] || mask_faces[4] || mask_faces[5];
+            if (has_boundary_faces) {
+              if (verbose)
+                std::cout << "#hs.silo: Masking global boundary faces (10 cells deep)..." << std::endl;
+              maskBoundaryFaces(scalars, nx_actual, ny_actual, nz_actual, mask_faces);
+            }
             
             if (verbose) {
               float min_val = scalars[0], max_val = scalars[0];
