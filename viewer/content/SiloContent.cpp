@@ -180,6 +180,273 @@ namespace hs {
     }
   }
 
+  // ============================================================================
+  // Lambda2 criterion computation functions
+  // ============================================================================
+  
+  // Compute gradient in X direction (one-sided differences at boundaries)
+  static void computeGradX(const std::vector<float>& u, std::vector<float>& uGrad, 
+                           int nx, int ny, int nz, float dx)
+  {
+    for (int z = 0; z < nz; ++z) {
+      size_t off = z * nx * ny;
+      for (int row = 0; row < ny; ++row) {
+        // One-sided forward difference at lower boundary
+        uGrad[off + row*nx] = (u[off + row*nx + 1] - u[off + row*nx]) / dx;
+        // One-sided backward difference at upper boundary
+        uGrad[off + row*nx + nx - 1] = (u[off + row*nx + nx - 1] - u[off + row*nx + nx - 2]) / dx;
+        // Interior points (central difference)
+        for (int col = 1; col < nx - 1; ++col) {
+          uGrad[off + row*nx + col] = 0.5f * (u[off + row*nx + col + 1] - u[off + row*nx + col - 1]) / dx;
+        }
+      }
+    }
+  }
+  
+  // Compute gradient in Y direction (one-sided differences at boundaries)
+  static void computeGradY(const std::vector<float>& v, std::vector<float>& vGrad,
+                           int nx, int ny, int nz, float dy)
+  {
+    for (int z = 0; z < nz; ++z) {
+      size_t off = z * nx * ny;
+      for (int col = 0; col < nx; ++col) {
+        // One-sided forward difference at lower boundary
+        vGrad[0*nx + col + off] = (v[1*nx + col + off] - v[0*nx + col + off]) / dy;
+        // One-sided backward difference at upper boundary
+        vGrad[(ny-1)*nx + col + off] = (v[(ny-1)*nx + col + off] - v[(ny-2)*nx + col + off]) / dy;
+        // Interior points (central difference)
+        for (int row = 1; row < ny - 1; ++row) {
+          vGrad[row*nx + col + off] = 0.5f * (v[(row+1)*nx + col + off] - v[(row-1)*nx + col + off]) / dy;
+        }
+      }
+    }
+  }
+  
+  // Compute gradient in Z direction (non-uniform spacing)
+  static void computeGradZ(const std::vector<float>& w, std::vector<float>& wGrad,
+                           int nx, int ny, int nz, const std::vector<float>& z)
+  {
+    size_t off = nx * ny;
+    for (int row = 0; row < ny; ++row) {
+      for (int col = 0; col < nx; ++col) {
+        // Boundaries (forward/backward difference)
+        wGrad[(nz-1)*off + row*nx + col] = (w[(nz-1)*off + row*nx + col] - w[(nz-2)*off + row*nx + col]) / (z[nz-1] - z[nz-2]);
+        wGrad[0*off + row*nx + col] = (w[1*off + row*nx + col] - w[0*off + row*nx + col]) / (z[1] - z[0]);
+        // Interior points (central difference)
+        for (int zi = 1; zi < nz - 1; ++zi) {
+          wGrad[zi*off + row*nx + col] = 0.5f * (w[(zi+1)*off + row*nx + col] - w[(zi-1)*off + row*nx + col]) / (z[zi+1] - z[zi-1]);
+        }
+      }
+    }
+  }
+  
+  // Compute all 9 velocity gradients
+  static void computeVelocityGradients(
+    const std::vector<float>& vel1, const std::vector<float>& vel2, const std::vector<float>& vel3,
+    int nx, int ny, int nz, float dx, float dy, const std::vector<float>& z,
+    std::vector<float>& dux, std::vector<float>& duy, std::vector<float>& duz,
+    std::vector<float>& dvx, std::vector<float>& dvy, std::vector<float>& dvz,
+    std::vector<float>& dwx, std::vector<float>& dwy, std::vector<float>& dwz)
+  {
+    computeGradX(vel1, dux, nx, ny, nz, dx);
+    computeGradX(vel2, dvx, nx, ny, nz, dx);
+    computeGradX(vel3, dwx, nx, ny, nz, dx);
+    
+    computeGradY(vel1, duy, nx, ny, nz, dy);
+    computeGradY(vel2, dvy, nx, ny, nz, dy);
+    computeGradY(vel3, dwy, nx, ny, nz, dy);
+    
+    computeGradZ(vel1, duz, nx, ny, nz, z);
+    computeGradZ(vel2, dvz, nx, ny, nz, z);
+    computeGradZ(vel3, dwz, nx, ny, nz, z);
+  }
+  
+  // Compute lambda2 criterion from velocity gradients
+  static void computeLambda2(const std::vector<float>& dux, const std::vector<float>& duy, const std::vector<float>& duz,
+                             const std::vector<float>& dvx, const std::vector<float>& dvy, const std::vector<float>& dvz,
+                             const std::vector<float>& dwx, const std::vector<float>& dwy, const std::vector<float>& dwz,
+                             std::vector<float>& result)
+  {
+    size_t len = dux.size();
+    for (size_t i = 0; i < len; ++i) {
+      // Strain rate tensor S = 0.5*(J + J^T)
+      float s11 = dux[i];
+      float s12 = 0.5f * (duy[i] + dvx[i]);
+      float s13 = 0.5f * (duz[i] + dwx[i]);
+      float s22 = dvy[i];
+      float s23 = 0.5f * (dvz[i] + dwy[i]);
+      float s33 = dwz[i];
+      
+      // Antisymmetric part Omega = 0.5*(J - J^T)
+      float o12 = 0.5f * (duy[i] - dvx[i]);
+      float o13 = 0.5f * (duz[i] - dwx[i]);
+      float o23 = 0.5f * (dvz[i] - dwy[i]);
+      
+      // S^2 + Omega^2
+      float m11 = s11*s11 + s12*s12 + s13*s13 - o12*o12 - o13*o13;
+      float m12 = s11*s12 + s12*s22 + s13*s23 + o12*(s11 - s22) + o13*o23;
+      float m13 = s11*s13 + s12*s23 + s13*s33 + o13*(s11 - s33) - o12*o23;
+      float m22 = s12*s12 + s22*s22 + s23*s23 - o12*o12 - o23*o23;
+      float m23 = s12*s13 + s22*s23 + s23*s33 + o23*(s22 - s33) + o12*o13;
+      float m33 = s13*s13 + s23*s23 + s33*s33 - o13*o13 - o23*o23;
+      
+      // Compute eigenvalues of 3x3 symmetric matrix
+      float p1 = m12*m12 + m13*m13 + m23*m23;
+      float q = (m11 + m22 + m33) / 3.0f;
+      float p2 = (m11 - q)*(m11 - q) + (m22 - q)*(m22 - q) + (m33 - q)*(m33 - q) + 2.0f*p1;
+      float p = std::sqrt(p2 / 6.0f);
+      
+      float b11 = (m11 - q) / p;
+      float b12 = m12 / p;
+      float b13 = m13 / p;
+      float b22 = (m22 - q) / p;
+      float b23 = m23 / p;
+      float b33 = (m33 - q) / p;
+      
+      float r = (b11*(b22*b33 - b23*b23) - b12*(b12*b33 - b23*b13) + b13*(b12*b23 - b22*b13)) / 2.0f;
+      r = std::max(-1.0f, std::min(1.0f, r));
+      
+      float phi = std::acos(r) / 3.0f;
+      float eig1 = q + 2.0f*p*std::cos(phi);
+      float eig3 = q + 2.0f*p*std::cos(phi + (2.0f*M_PI/3.0f));
+      float eig2 = 3.0f*q - eig1 - eig3; // middle eigenvalue
+      
+      result[i] = -std::min(eig2, 0.0f);
+    }
+  }
+
+  // Helper function to load a specific scalar variable from a quad mesh
+  static bool loadQuadVar(DBfile *dbfile, 
+                          const char *varName,
+                          const char *meshName,
+                          int ndims,
+                          int *dims,
+                          int *min_index,
+                          int *max_index,
+                          std::vector<float> &scalars,
+                          bool verbose)
+  {
+    DBquadvar *qv = DBGetQuadvar(dbfile, varName);
+    if (!qv) {
+      if (verbose)
+        std::cerr << "#hs.silo: Warning - failed to read variable: " << varName << std::endl;
+      return false;
+    }
+
+    // Check if this variable matches the mesh dimensions
+    bool matches_mesh = false;
+    if (qv->meshname) {
+      matches_mesh = (strcmp(qv->meshname, meshName) == 0);
+    }
+    
+    if (!matches_mesh && qv->ndims == ndims) {
+      matches_mesh = true;
+      for (int d = 0; d < ndims; d++) {
+        if (qv->dims[d] != dims[d] && qv->dims[d] != dims[d]-1) {
+          matches_mesh = false;
+          break;
+        }
+      }
+    }
+    
+    if (!matches_mesh) {
+      if (verbose)
+        std::cerr << "#hs.silo: Variable " << varName << " doesn't match mesh" << std::endl;
+      DBFreeQuadvar(qv);
+      return false;
+    }
+    
+    if (qv->nvals != 1) {
+      if (verbose)
+        std::cout << "#hs.silo: Skipping vector variable: " << varName 
+                  << " (nvals=" << qv->nvals << ")" << std::endl;
+      DBFreeQuadvar(qv);
+      return false;
+    }
+    
+    // Determine the real data range based on centering
+    int *var_dims = qv->dims;
+    int var_min[3], var_max[3];
+    for (int d = 0; d < 3; d++) {
+      if (var_dims[d] == dims[d]) {
+        // Node-centered
+        var_min[d] = min_index[d];
+        var_max[d] = max_index[d];
+      } else if (var_dims[d] == dims[d] - 1) {
+        // Zone-centered
+        var_min[d] = min_index[d];
+        var_max[d] = max_index[d];
+      } else {
+        var_min[d] = 0;
+        var_max[d] = var_dims[d] - 1;
+      }
+    }
+    
+    // Calculate dimensions of real data
+    int real_dims[3] = {
+      var_max[0] - var_min[0] + 1,
+      var_max[1] - var_min[1] + 1,
+      var_max[2] - var_min[2] + 1
+    };
+    int real_nels = real_dims[0] * real_dims[1] * real_dims[2];
+    scalars.resize(real_nels);
+    
+    // Extract the data
+    int total_var_els = var_dims[0] * var_dims[1] * var_dims[2];
+    
+    if (qv->datatype == DB_FLOAT) {
+      float *data = (float*)qv->vals[0];
+      if (data) {
+        int idx = 0;
+        for (int k = var_min[2]; k <= var_max[2]; k++) {
+          for (int j = var_min[1]; j <= var_max[1]; j++) {
+            for (int i = var_min[0]; i <= var_max[0]; i++) {
+              int src_idx = i + var_dims[0] * (j + var_dims[1] * k);
+              if (src_idx >= 0 && src_idx < total_var_els) {
+                scalars[idx++] = data[src_idx];
+              }
+            }
+          }
+        }
+      }
+    } else if (qv->datatype == DB_DOUBLE) {
+      double *data = (double*)qv->vals[0];
+      if (data) {
+        int idx = 0;
+        for (int k = var_min[2]; k <= var_max[2]; k++) {
+          for (int j = var_min[1]; j <= var_max[1]; j++) {
+            for (int i = var_min[0]; i <= var_max[0]; i++) {
+              int src_idx = i + var_dims[0] * (j + var_dims[1] * k);
+              if (src_idx >= 0 && src_idx < total_var_els) {
+                scalars[idx++] = (float)data[src_idx];
+              }
+            }
+          }
+        }
+      }
+    } else {
+      if (verbose)
+        std::cerr << "#hs.silo: Unsupported data type: " << qv->datatype << std::endl;
+      DBFreeQuadvar(qv);
+      return false;
+    }
+    
+    DBFreeQuadvar(qv);
+    
+    if (verbose) {
+      float min_val = scalars[0], max_val = scalars[0];
+      for (float v : scalars) {
+        if (v < min_val) min_val = v;
+        if (v > max_val) max_val = v;
+      }
+      std::cout << "#hs.silo: Loaded variable: " << varName 
+                << " (" << real_nels << " elements, range: [" 
+                << min_val << ":" << max_val << "])" << std::endl;
+    }
+    
+    return true;
+  }
+
   SiloContent::SiloContent(const std::string &fileName)
     : fileName(fileName),
       fileSize(getFileSize(fileName)),
@@ -552,13 +819,122 @@ namespace hs {
         return;
       }
       
-      for (int i = 0; i < mesh_toc->nqvar; i++) {
-        const char *var_name = mesh_toc->qvar_names[i];
+      // Check if this is a derived field (lambda2 or vel_mag)
+      if (requestedVar == "lambda2" || requestedVar == "vel_mag") {
+        if (verbose)
+          std::cout << "#hs.silo: Computing derived field: " << requestedVar << std::endl;
         
-        // If a specific variable is requested, skip others
-        if (!requestedVar.empty() && requestedVar != var_name) {
-          continue;
+        // Load the three velocity fields
+        std::vector<float> vel1_f, vel2_f, vel3_f;
+        bool success = true;
+        
+        success &= loadQuadVar(dbfile, "vel1", meshName, ndims, dims, min_index, max_index, vel1_f, verbose);
+        success &= loadQuadVar(dbfile, "vel2", meshName, ndims, dims, min_index, max_index, vel2_f, verbose);
+        success &= loadQuadVar(dbfile, "vel3", meshName, ndims, dims, min_index, max_index, vel3_f, verbose);
+        
+        if (success && vel1_f.size() == vel2_f.size() && vel2_f.size() == vel3_f.size()) {
+          
+          if (requestedVar == "vel_mag") {
+            // Compute velocity magnitude: sqrt(vel1^2 + vel2^2 + vel3^2)
+            scalars.resize(vel1_f.size());
+            for (size_t i = 0; i < vel1_f.size(); i++) {
+              scalars[i] = std::sqrt(vel1_f[i]*vel1_f[i] + 
+                                     vel2_f[i]*vel2_f[i] + 
+                                     vel3_f[i]*vel3_f[i]);
+            }
+            
+            if (verbose) {
+              float min_val = scalars[0], max_val = scalars[0];
+              for (float v : scalars) {
+                if (v < min_val) min_val = v;
+                if (v > max_val) max_val = v;
+              }
+              std::cout << "#hs.silo: Velocity magnitude computed (range: [" 
+                        << min_val << ":" << max_val << "])" << std::endl;
+            }
+          } 
+          else if (requestedVar == "lambda2") {
+            // Extract coordinate arrays for gradient computation
+            std::vector<float> z_coords;
+            
+            // Grid dimensions
+            int nx_actual = max_index[0] - min_index[0] + 1;
+            int ny_actual = max_index[1] - min_index[1] + 1;
+            int nz_actual = max_index[2] - min_index[2] + 1;
+            
+            // Extract z coordinates for non-uniform spacing
+            int z_count = max_index[2] - min_index[2] + 1;
+            z_coords.resize(z_count);
+            
+            if (qm->coordtype == DB_COLLINEAR) {
+              if (qm->datatype == DB_FLOAT) {
+                float *z = (float*)qm->coords[2];
+                for (int k = 0; k < z_count; k++) z_coords[k] = z[min_index[2] + k];
+              } else if (qm->datatype == DB_DOUBLE) {
+                double *z = (double*)qm->coords[2];
+                for (int k = 0; k < z_count; k++) z_coords[k] = (float)z[min_index[2] + k];
+              }
+            } else {
+              // For non-collinear grids, create uniform spacing
+              for (int k = 0; k < z_count; k++) {
+                z_coords[k] = gridOrigin.z + k * gridSpacing.z;
+              }
+            }
+            
+            // Get dx, dy from grid spacing
+            float dx = gridSpacing.x;
+            float dy = gridSpacing.y;
+            
+            size_t len = vel1_f.size();
+            
+            // Allocate gradient arrays
+            std::vector<float> dux(len), duy(len), duz(len);
+            std::vector<float> dvx(len), dvy(len), dvz(len);
+            std::vector<float> dwx(len), dwy(len), dwz(len);
+            
+            if (verbose)
+              std::cout << "#hs.silo: Computing velocity gradients (dx=" << dx << ", dy=" << dy << ")..." << std::endl;
+            
+            // Compute all 9 velocity gradients
+            computeVelocityGradients(vel1_f, vel2_f, vel3_f,
+                                     nx_actual, ny_actual, nz_actual,
+                                     dx, dy, z_coords,
+                                     dux, duy, duz,
+                                     dvx, dvy, dvz,
+                                     dwx, dwy, dwz);
+            
+            if (verbose)
+              std::cout << "#hs.silo: Computing lambda2..." << std::endl;
+            
+            // Compute lambda2
+            scalars.resize(len);
+            computeLambda2(dux, duy, duz, dvx, dvy, dvz, dwx, dwy, dwz, scalars);
+            
+            if (verbose) {
+              float min_val = scalars[0], max_val = scalars[0];
+              for (float v : scalars) {
+                if (v < min_val) min_val = v;
+                if (v > max_val) max_val = v;
+              }
+              std::cout << "#hs.silo: Lambda2 computed successfully (range: [" 
+                        << min_val << ":" << max_val << "])" << std::endl;
+            }
+          }
+        } else {
+          if (verbose)
+            std::cerr << "#hs.silo: Failed to load velocity fields for derived field computation" << std::endl;
         }
+      }
+      
+      // Load regular scalar variables if lambda2 wasn't computed
+      if (scalars.empty()) {  // Only load if we haven't already computed a derived field
+        for (int i = 0; i < mesh_toc->nqvar; i++) {
+          const char *var_name = mesh_toc->qvar_names[i];
+          
+          // If a specific variable is requested, skip others
+          if (!requestedVar.empty() && requestedVar != var_name) {
+            continue;
+          }
         
         DBquadvar *qv = DBGetQuadvar(dbfile, var_name);
         if (qv) {
@@ -701,11 +1077,12 @@ namespace hs {
           }
         }
         if (qv) DBFreeQuadvar(qv);
-      }
+        }  // end for loop over variables
 
-      if (verbose && mesh_toc->nqvar > 0) {
-        std::cout << "#hs.silo:   Found " << mesh_toc->nqvar << " quad variables" << std::endl;
-      }
+        if (verbose && mesh_toc->nqvar > 0) {
+          std::cout << "#hs.silo:   Found " << mesh_toc->nqvar << " quad variables" << std::endl;
+        }
+      }  // end if (scalars.empty())
 
       if (!scalars.empty()) {
         // Use the real (non-ghost) volume dimensions
