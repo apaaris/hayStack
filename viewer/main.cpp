@@ -95,6 +95,7 @@ namespace hs {
     int  numFramesAccum = 1;
     int  spp            = 1;
     bool verbose = true;
+    bool skipRendering = false;  // If true, skip viewer/rendering (for export-only mode)
     struct {
       vec3f vp   = vec3f(0.f);
       vec3f vi   = vec3f(0.f);
@@ -729,6 +730,17 @@ int main(int ac, char **av)
     const std::string arg = av[i];
     if (arg[0] != '-') {
       loader.addContent(arg);
+      // Check if this resource has render=false parameter
+      try {
+        if (arg.find("://") != std::string::npos) {
+          ResourceSpecifier spec(arg);
+          if (spec.has("render") && !spec.get_bool("render", true)) {
+            fromCL.skipRendering = true;
+          }
+        }
+      } catch (...) {
+        // Ignore parsing errors for non-resource URIs
+      }
     } else if (arg == "--no-bg") {
       fromCL.useBackground = false;
     } else if (arg == "-bg") {
@@ -909,6 +921,18 @@ int main(int ac, char **av)
     hayMaker->buildSlots();
   
   world.barrier();
+
+  // Check if we should skip rendering (export-only mode)
+  if (fromCL.skipRendering) {
+    if (world.rank == 0) {
+      std::cout << MINI_TERMINAL_CYAN
+                << "#hs: render=false specified, skipping viewer initialization and exiting"
+                << MINI_TERMINAL_DEFAULT << std::endl;
+    }
+    world.barrier();
+    hs::mpi::finalize();
+    exit(0);
+  }
 
   Renderer *renderer = nullptr;
   if (world.size == 1)

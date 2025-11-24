@@ -37,6 +37,7 @@ namespace hs {
     size_t get_size(const std::string &key, size_t defaultValue) const;
     int    get_int(const std::string &key, int defaultValue) const;
     float  get_float(const std::string &key, float defaultValue) const;
+    bool   get_bool(const std::string &key, bool defaultValue) const;
     std::string where;
     std::string type;
     int numParts = 1;

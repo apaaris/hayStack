@@ -178,6 +178,17 @@ namespace hs {
     return std::stof(value);
   }
   
+  bool ResourceSpecifier::get_bool(const std::string &key,
+                                    bool defaultValue) const
+  {
+    if (!has(key)) return defaultValue;
+    std::string value = keyValuePairs.find(key)->second;
+    // Accept "true", "1", "yes" as true; "false", "0", "no" as false
+    if (value == "true" || value == "1" || value == "yes") return true;
+    if (value == "false" || value == "0" || value == "no") return false;
+    return defaultValue;
+  }
+  
   bool startsWith(const std::string &haystack,
                   const std::string &needle)
   {
